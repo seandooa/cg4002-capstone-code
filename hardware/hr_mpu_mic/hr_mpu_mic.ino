@@ -1,20 +1,28 @@
-// ===================== MODE TOGGLE =====================
-// Set to 1 for HR + Step mode (Serial Monitor + Bluetooth)
-// Set to 0 for Microphone mode (Serial Monitor + Bluetooth)
-#define ENABLE_VITALS 0   // change to 1 for vitals mode
-
 #include <Wire.h>
 #include <math.h>
 #include <MAX3010x.h>
 #include "filters.h"
 #include "FastIMU.h"
 #include <driver/i2s.h>
-#include "BluetoothSerial.h"
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+#include <BLE2902.h>
 
-BluetoothSerial BTSerial; // Bluetooth object
+// ===================== BLE CONFIG =====================
+#define SERVICE_UUID        "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+#define CHARACTERISTIC_UUID "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 
-#if ENABLE_VITALS
-// ===================== MAX3010x Pulse Oximeter =====================
+BLEServer *pServer;
+BLECharacteristic *pCharacteristic;
+
+void BLESend(String data) {
+  Serial.print(data); // also print for debugging
+  pCharacteristic->setValue(data.c_str());
+  pCharacteristic->notify();
+}
+
+// ===================== VITALS VARIABLES =====================
 MAX30105 sensor;
 const auto kSamplingRate = sensor.SAMPLING_RATE_400SPS;
 const float kSamplingFrequency = 400.0;
@@ -41,19 +49,15 @@ float kSpO2_C = 112.6898759;
 long last_heartbeat = 0;
 long finger_timestamp = 0;
 bool finger_detected = false;
-float last_diff = NAN;
-bool crossed = false;
-long crossed_time = 0;
 
 int latest_bpm = 0;
 float latest_spo2 = 0;
 float latest_r = 0;
 bool new_heartbeat = false;
 
-// ===================== MPU6500 Pedometer =====================
+// ===================== MPU6500 STEP VARIABLES =====================
 #define IMU_ADDRESS 0x68
 MPU6500 IMU;
-
 calData calib = {0};
 AccelData accelData;
 
@@ -70,14 +74,11 @@ bool new_step = false;
 
 unsigned long lastHRTime = 0;      // ~400 Hz
 unsigned long lastStepCheck = 0;  // ~50 Hz
-#endif
 
-#if !ENABLE_VITALS
-// ===================== INMP441 Microphone =====================
+// ===================== MICROPHONE VARIABLES =====================
 #define I2S_WS 17
 #define I2S_SCK 14
 #define I2S_SD 4
-
 #define GAIN 0.2
 #define THRESHOLD 5000
 #define CLIP 10000
@@ -109,19 +110,6 @@ int smoothIndex = 0;
 int downsampleCounter = 0;
 int32_t btBuffer[BT_CHUNK];
 int btIndex = 0;
-#endif
-
-// ===================== SERIAL/BT PRINT HELPERS =====================
-void BTPrint(const char* str) { Serial.print(str); BTSerial.print(str); }
-void BTPrintLn(const char* str) { Serial.println(str); BTSerial.println(str); }
-void BTPrint(int val) { Serial.print(val); BTSerial.print(val); }
-void BTPrintLn(int val) { Serial.println(val); BTSerial.println(val); }
-void BTPrint(unsigned long val) { Serial.print(val); BTSerial.print(val); }
-void BTPrintLn(unsigned long val) { Serial.println(val); BTSerial.println(val); }
-void BTPrint(int32_t val) { Serial.print(val); BTSerial.print(val); }
-void BTPrintLn(int32_t val) { Serial.println(val); BTSerial.println(val); }
-void BTPrint(float val, int decimals = 2) { Serial.print(val, decimals); BTSerial.print(val, decimals); }
-void BTPrintLn(float val, int decimals = 2) { Serial.println(val, decimals); BTSerial.println(val, decimals); }
 
 // ===================== SETUP =====================
 void setup() {
@@ -129,19 +117,33 @@ void setup() {
   Wire.begin();
   Wire.setClock(400000);
 
-  BTSerial.begin(ENABLE_VITALS ? "ESP32_Vitals" : "ESP32_MIC");
+  // ---------- BLE ----------
+  BLEDevice::init("ESP32_MultiSensor");
+  pServer = BLEDevice::createServer();
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  pCharacteristic = pService->createCharacteristic(
+      CHARACTERISTIC_UUID,
+      BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  BLEDevice::startAdvertising();
+  Serial.println("BLE ready!");
 
-#if ENABLE_VITALS
+  // ---------- Vitals Setup ----------
   if (!sensor.begin() || !sensor.setSamplingRate(kSamplingRate)) {
-    BTPrintLn("MAX3010x not found!");
+    BLESend("MAX3010x not found!");
     while(1);
   }
   if (IMU.init(calib, IMU_ADDRESS) != 0) {
-    BTPrintLn("IMU init failed!");
+    BLESend("IMU init failed!");
     while(1);
   }
 
-  BTPrintLn("Calibrating IMU baseline, keep still...");
+  // Calibrate IMU baseline
+  BLESend("Calibrating IMU baseline, keep still...");
   float sum = 0;
   for (int i=0;i<200;i++){
     IMU.update();
@@ -153,22 +155,20 @@ void setup() {
     delay(10);
   }
   baseline = sum/200;
-  BTPrint("Baseline set: "); BTPrintLn(baseline,3);
-  BTPrintLn("Vitals ready!");
-#else
+  BLESend("Baseline set: " + String(baseline,3));
+  BLESend("Vitals ready!");
+
+  // ---------- Microphone Setup ----------
   i2s_driver_install(I2S_NUM_0,&i2s_config,0,NULL);
   i2s_set_pin(I2S_NUM_0,&pin_config);
-  BTPrintLn("Mic ready (plotter mode).");
-#endif
+  BLESend("Mic ready (plotter mode).");
 }
 
 // ===================== LOOP =====================
 void loop() {
-
-#if ENABLE_VITALS
   unsigned long now = millis();
 
-  // ---------- HR Sampling ----------
+  // -------------------- HR Sampling --------------------
   if(now - lastHRTime >= 2){
     lastHRTime = now;
     auto sample = sensor.readSample(0);
@@ -232,7 +232,7 @@ void loop() {
     }
   }
 
-  // ---------- Step Counting ----------
+  // -------------------- Step Counting --------------------
   if(now - lastStepCheck >= 20){
     lastStepCheck=now;
     IMU.update(); IMU.getAccel(&accelData);
@@ -251,24 +251,8 @@ void loop() {
     }
   }
 
-  // ---------- Print HR/Step ----------
-  if(new_heartbeat || new_step){
-    BTPrint("["); BTPrint(now); BTPrintLn(" ms]");
-    if(finger_detected && new_heartbeat){
-      BTPrint("Heart Rate (bpm): "); BTPrintLn(latest_bpm);
-      BTPrint("R-Value: "); BTPrintLn(latest_r,3);
-      BTPrint("SpO2 (%): "); BTPrintLn(latest_spo2,1);
-    }
-    BTPrint("Steps: "); BTPrintLn(stepCount);
-    BTPrint("DynAccel (g): "); BTPrintLn(latest_dynAccel,3);
-    BTPrintLn("---------------------------------------");
-    new_heartbeat=false; new_step=false;
-  }
-
-#else
-  // ---------- Microphone Mode ----------
+  // -------------------- Microphone Sampling --------------------
   const int buffer_len=256; int32_t buffer[buffer_len]; size_t bytes_read=0;
-
   if(i2s_read(I2S_NUM_0,(char*)buffer,sizeof(buffer),&bytes_read,0)==ESP_OK && bytes_read>0){
     int samples=bytes_read/4;
     for(int i=0;i<samples;i++){
@@ -291,15 +275,23 @@ void loop() {
         downsampleCounter=0;
 
         if(btIndex>=BT_CHUNK){
+          // -------------------- Send all data --------------------
+          String out = "{";
+          out += "\"time\":" + String(now) + ",";
+          out += "\"bpm\":" + String(latest_bpm) + ",";
+          out += "\"spo2\":" + String(latest_spo2,1) + ",";
+          out += "\"steps\":" + String(stepCount) + ",";
+          out += "\"mic\":[";
           for(int k=0;k<BT_CHUNK;k++){
-            Serial.println(btBuffer[k]);
-            BTSerial.println(btBuffer[k]);
+            out += String(btBuffer[k]);
+            if(k<BT_CHUNK-1) out += ",";
           }
+          out += "]}";
+          BLESend(out);
           btIndex=0;
         }
       }
     }
   }
-  delay(1); // yield
-#endif
+  delay(1);
 }

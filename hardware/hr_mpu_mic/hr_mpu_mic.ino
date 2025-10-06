@@ -8,6 +8,14 @@
 #include <BLEUtils.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// ===================== OLED CONFIG =====================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // ===================== BLE CONFIG =====================
 #define SERVICE_UUID        "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -111,11 +119,52 @@ int downsampleCounter = 0;
 int32_t btBuffer[BT_CHUNK];
 int btIndex = 0;
 
+// ===================== OLED DISPLAY FUNCTION =====================
+void updateDisplay() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.println("ESP32 Multi-Sensor");
+
+  display.setTextSize(2);
+  display.setCursor(0, 16);
+  display.print("HR: ");
+  display.print(latest_bpm);
+  display.println(" bpm");
+
+  display.setTextSize(2);
+  display.setCursor(0, 36);
+  display.print("SpO2: ");
+  display.print(latest_spo2, 0);
+  display.println("%");
+
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  display.print("Steps: ");
+  display.print(stepCount);
+
+  display.display();
+}
+
 // ===================== SETUP =====================
 void setup() {
   Serial.begin(115200);
   Wire.begin();
   Wire.setClock(400000);
+
+  // ---------- OLED ----------
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("SSD1306 init failed!");
+    while (1);
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("Initializing...");
+  display.display();
 
   // ---------- BLE ----------
   BLEDevice::init("ESP32_MultiSensor");
@@ -135,15 +184,28 @@ void setup() {
   // ---------- Vitals Setup ----------
   if (!sensor.begin() || !sensor.setSamplingRate(kSamplingRate)) {
     BLESend("MAX3010x not found!");
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("MAX3010x not found!");
+    display.display();
     while(1);
   }
   if (IMU.init(calib, IMU_ADDRESS) != 0) {
     BLESend("IMU init failed!");
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("IMU init failed!");
+    display.display();
     while(1);
   }
 
   // Calibrate IMU baseline
-  BLESend("Calibrating IMU baseline, keep still...");
+  BLESend("Calibrating IMU baseline...");
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println("Calibrating IMU...");
+  display.display();
+
   float sum = 0;
   for (int i=0;i<200;i++){
     IMU.update();
@@ -157,6 +219,10 @@ void setup() {
   baseline = sum/200;
   BLESend("Baseline set: " + String(baseline,3));
   BLESend("Vitals ready!");
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println("System Ready!");
+  display.display();
 
   // ---------- Microphone Setup ----------
   i2s_driver_install(I2S_NUM_0,&i2s_config,0,NULL);
@@ -293,5 +359,13 @@ void loop() {
       }
     }
   }
+
+  // -------------------- OLED Update --------------------
+  static unsigned long lastDisplayUpdate = 0;
+  if (now - lastDisplayUpdate >= 1000) { // every 1 second
+    updateDisplay();
+    lastDisplayUpdate = now;
+  }
+
   delay(1);
 }

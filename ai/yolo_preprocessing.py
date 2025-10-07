@@ -33,7 +33,11 @@ def preprocess_image(imagePath):
 
 def preprocessing(imageFolder, batchSize):
 
-    imageList = os.listdir(imageFolder)
+    imageList = []
+    imageFiles = os.listdir(imageFolder)
+    for image in imageFiles:
+        if image[0] != ".":
+            imageList.append(image)
     exercises = [int(imagePath[1]) for imagePath in imageList] #ex_idx.png/jpg
 
     dataset = NNDataset(np.array(imageList), np.array(exercises))

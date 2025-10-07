@@ -62,7 +62,7 @@ extern "C" void nn_inference(hls::stream<trans_pkt> &in_stream, hls::stream<tran
    data_t output[OUTPUT_SIZE];
    linear_layer<OUTPUT_SIZE, HIDDEN_SIZE>(linear2_w, linear2_b, hidden, output);
     pkt.data = output[0];
-    pkt.last = 1;
+    pkt.last = 1; //to complete the AXI stream transaction
     pkt.strb = 0xf;
     pkt.keep = 0xf;
     out_stream.write(pkt);

@@ -1,7 +1,3 @@
-#pass through CNN layers
-#determine the kernel size and maxpooling
-#pass through linear layers
-
 import torch
 import numpy as np
 from ultralytics import YOLO
@@ -15,11 +11,6 @@ squats: 90 degrees, knees shoulder width apart + little bit of allowance, dont l
 lateral raises:  
 '''
 
-BATCH_SIZE = 5
-EPOCH_FOLDER_DIR = "epochs"
-EPOCH_FILEPATH = "model_epoch_11.pt" 
-POSE_MODEL = "models/yolo11n-pose.pt"
-
 BICEP_CURLS_KEYPOINTS = [5, 6, 7, 8, 9, 10]
 BICEP_CURL_EDGES = [(5,7), (7,9), (6,8), (8,10), (5,6)]
 
@@ -31,6 +22,11 @@ LATERAL_RAISE_EDGES = [(5,7),(7,9),(6,8),(8,10),(5,6),(11,12),(5,11),(6,12)]
 
 KEYPOINTS = [BICEP_CURLS_KEYPOINTS, SQUATS_KEYPOINTS, LATERAL_RAISE_KEYPOINTS]
 EDGES = [BICEP_CURL_EDGES, SQUAT_EDGES, LATERAL_RAISE_EDGES]
+
+BATCH_SIZE = 64
+POSE_MODEL = "models/yolo11n-pose.pt"
+device = torch.device("mps" if torch.backends.mps.is_available() and torch.backends.mps.is_built() else "cpu")
+poseModel = YOLO(POSE_MODEL).to(device)
 
 def process_array(results, exercises):
     poses = []
@@ -62,11 +58,10 @@ def process_array(results, exercises):
 
     return torch.stack(poses)   # shape (batch_size, feature_dim)
 
-def yolo_inference(inference_dataloader: DataLoader, epoch_folder_path: str, epoch_filepath: str):
+
+def yolo_inference(imageList: list, pose_model):
+    inference_dataloader = preprocessing(imageList=imageList, batchSize=BATCH_SIZE)
     result = []
-    device = torch.device("mps" if torch.backends.mps.is_available() and torch.backends.mps.is_built() else "cpu")
-    
-    pose_model = YOLO(POSE_MODEL)
     
     with torch.inference_mode():
         for batch in inference_dataloader:
@@ -79,10 +74,4 @@ def yolo_inference(inference_dataloader: DataLoader, epoch_folder_path: str, epo
     return result
 
 if __name__ == "__main__":
-    
-    #data preprocessing
-    print("\n>>> Processing and loading training data ...")
-    inference_dataloader = preprocessing(imageFolder="images", batchSize=BATCH_SIZE)
-
-    #actual training loop
-    yolo_inference(inference_dataloader=inference_dataloader, epoch_folder_path=EPOCH_FOLDER_DIR, epoch_filepath=EPOCH_FILEPATH)
+    yolo_inference(["images/e1_1.png", "images/e3_2.png"], poseModel)

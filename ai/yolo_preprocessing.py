@@ -21,7 +21,6 @@ class NNDataset(Dataset):
         return torch.tensor(image, dtype=torch.float32), exercise
 
 def preprocess_image(imagePath):
-    imagePath = f'images/{imagePath}'
     image = cv2.imread(imagePath)
     if image is None:
         raise FileNotFoundError(f"Image not found: {imagePath}")
@@ -31,14 +30,9 @@ def preprocess_image(imagePath):
     normalized = resized.astype(np.float32) / 255.0
     return normalized.transpose(2, 0, 1)
 
-def preprocessing(imageFolder, batchSize):
-
-    imageList = []
-    imageFiles = os.listdir(imageFolder)
-    for image in imageFiles:
-        if image[0] != ".":
-            imageList.append(image)
-    exercises = [int(imagePath[1]) for imagePath in imageList] #ex_idx.png/jpg
+def preprocessing(imageList, batchSize):
+    images = [imagePath.split("/")[-1] for imagePath in imageList]
+    exercises = [int(img[1]) for img in images] #ex_idx.png/jpg, to get the exercise type
 
     dataset = NNDataset(np.array(imageList), np.array(exercises))
     dataloader = DataLoader(dataset, batch_size=batchSize)

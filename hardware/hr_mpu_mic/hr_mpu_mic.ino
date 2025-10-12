@@ -130,13 +130,13 @@ void updateDisplay() {
 
   display.setTextSize(2);
   display.setCursor(0, 16);
-  display.print("HR: ");
+  display.print("HR:");
   display.print(latest_bpm);
   display.println(" bpm");
 
   display.setTextSize(2);
   display.setCursor(0, 36);
-  display.print("SpO2: ");
+  display.print("SpO2:");
   display.print(latest_spo2, 0);
   display.println("%");
 

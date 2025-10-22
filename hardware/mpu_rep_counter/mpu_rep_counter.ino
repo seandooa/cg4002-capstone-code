@@ -1,233 +1,216 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include "MAX30105.h"
+#include "heartRate.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+// --- MAX30105 Heart Rate Sensor ---
+MAX30105 particleSensor;
+const byte RATE_SIZE = 4;
+byte rates[RATE_SIZE];
+byte rateSpot = 0;
+long lastBeat = 0;
+float beatsPerMinute;
+int beatAvg = 0;
+
+// --- MPU6050 ---
 Adafruit_MPU6050 mpu;
 
-// --- BLE Configuration ---
-#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+// --- OLED ---
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-BLECharacteristic* pCharacteristic;
-bool deviceConnected = false;
-bool oldDeviceConnected = false;
-
-// --- Button Configuration ---
+// --- Button ---
 #define BUTTON_PIN 25
 unsigned long lastButtonPress = 0;
-const unsigned long debounceDelay = 300; // ms
+const unsigned long debounceDelay = 300;
 
-// --- Exercise Configuration ---
-enum ExerciseMode {
+// --- Modes ---
+enum Mode {
+  HR_ONLY,
   BICEP_CURL,
   LATERAL_RAISE,
   SQUAT
 };
+Mode currentMode = HR_ONLY;
 
-ExerciseMode currentExercise = BICEP_CURL; // Starting exercise
+// --- Rep Counting ---
+enum RepState { RESTING, LIFTING, LOWERING };
+RepState repState = RESTING;
 int repCount = 0;
 
-// --- State Machine for Rep Counting ---
-enum RepState {
-  RESTING,
-  LIFTING,
-  LOWERING
-};
-
-RepState repState = RESTING;
-
-// --- Thresholds for Angles ---
+// --- Thresholds ---
 const float BICEP_CURL_START_ANGLE = 140.0; 
 const float BICEP_CURL_END_ANGLE = 50.0;   
 const float LATERAL_RAISE_START_ANGLE = 15.0;
 const float LATERAL_RAISE_END_ANGLE = 80.0; 
-const float SQUAT_START_ANGLE = 5.0;    
+const float SQUAT_START_ANGLE = 5.0;     
 const float SQUAT_END_ANGLE = 75.0;   
 
-// --- OLED Display Configuration ---
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET    -1
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+// --- Heart Icons (Bitmap data should be placed here) ---
+static const unsigned char PROGMEM logo2_bmp[] =
+{ 0x03, 0xC0, 0xF0, 0x06, 0x71, 0x8C, 0x0C, 0x1B, 0x06, 0x18, 0x0E, 0x02, 0x10, 0x0C, 0x03, 0x10,
+0x04, 0x01, 0x10, 0x04, 0x01, 0x10, 0x40, 0x01, 0x10, 0x40, 0x01, 0x10, 0xC0, 0x03, 0x08, 0x88,
+0x02, 0x08, 0xB8, 0x04, 0xFF, 0x37, 0x08, 0x01, 0x30, 0x18, 0x01, 0x90, 0x30, 0x00, 0xC0, 0x60,
+0x00, 0x60, 0xC0, 0x00, 0x31, 0x80, 0x00, 0x1B, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x04, 0x00,  };
 
-// --- BLE Server Callbacks ---
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) { deviceConnected = true; }
-    void onDisconnect(BLEServer* pServer) { deviceConnected = false; }
-};
-
-const char* getExerciseString(ExerciseMode mode) {
-  switch (mode) {
-    case BICEP_CURL: return "Bicep Curl";
-    case LATERAL_RAISE: return "Lateral Raise";
-    case SQUAT: return "Squat";
-    default: return "Unknown";
-  }
-}
-
-void updateAndPrintState() {
-  // Print to Serial Monitor
-  Serial.println("--------------------");
-  Serial.print("Current Exercise: ");
-  Serial.println(getExerciseString(currentExercise));
-  Serial.print("Rep Count: ");
-  Serial.println(repCount);
-  Serial.println("--------------------");
-
-  // Update BLE Characteristic
-  if (deviceConnected) {
-    char dataString[50];
-    snprintf(dataString, sizeof(dataString), "%s,%d", getExerciseString(currentExercise), repCount);
-    pCharacteristic->setValue(dataString);
-    pCharacteristic->notify();
-    Serial.print("Notifying value: ");
-    Serial.println(dataString);
-  }
-
-  // Update OLED Display
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 10);
-  display.println("Exercise:");
-  display.setTextSize(2);
-  display.setCursor(0, 25);
-  display.println(getExerciseString(currentExercise));
-  display.setTextSize(1);
-  display.setCursor(0, 50);
-  display.print("Reps: ");
-  display.println(repCount);
-  display.display();
-}
-
-void setup(void) {
+void setup() {
   Serial.begin(115200);
-  while (!Serial) delay(10); 
+  delay(100);
 
-  Serial.println("Exercise Rep Counter Initializing...");
+  // --- OLED ---
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { 
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
+  }
+  display.display();
+  delay(1000);
 
-  // --- MPU6050 Setup ---
+  // --- MAX30105 ---
+  if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+    Serial.println("MAX30105 was not found. Please check wiring/power.");
+    while (1);
+  }
+  particleSensor.setup();
+  particleSensor.setPulseAmplitudeRed(0x0A);
+
+  // --- MPU6050 ---
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
-    while (1) { delay(10); }
+    while (1) delay(10);
   }
-  Serial.println("MPU6050 Found!");
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
   delay(100);
 
-  // --- OLED Setup ---
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Default I2C address 0x3C
-    Serial.println(F("SSD1306 allocation failed"));
-    while(1);
-  }
-  display.clearDisplay();
-  display.display();
-
-  // --- BLE Setup ---
-  Serial.println("Starting BLE setup...");
-  BLEDevice::init("RepCounterESP32");
-  BLEServer *pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-  BLEService *pService = pServer->createService(SERVICE_UUID);
-  pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      BLECharacteristic::PROPERTY_READ   |
-                      BLECharacteristic::PROPERTY_NOTIFY
-                    );
-  pCharacteristic->addDescriptor(new BLE2902());
-  pService->start();
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);
-  pAdvertising->setMinPreferred(0x12);
-  BLEDevice::startAdvertising();
-  Serial.println("Characteristic defined! Now advertising...");
-
-  // --- Button Setup ---
+  // --- Button ---
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-
-  updateAndPrintState();
 }
 
 void loop() {
-  // Handle BLE connection state changes
-  if (deviceConnected && !oldDeviceConnected) {
-      oldDeviceConnected = deviceConnected;
-      Serial.println("Device Connected");
-      updateAndPrintState();
-  }
-  if (!deviceConnected && oldDeviceConnected) {
-      oldDeviceConnected = deviceConnected;
-      Serial.println("Device Disconnected");
-      delay(500); 
-      BLEDevice::startAdvertising();
-      Serial.println("Restart advertising");
-  }
-
-  // --- Button Check ---
+  // --- Button Mode Switch ---
   int buttonState = digitalRead(BUTTON_PIN);
-  if (buttonState == LOW) { // Button pressed
+  if (buttonState == LOW) {
     unsigned long currentTime = millis();
     if (currentTime - lastButtonPress > debounceDelay) {
-      // Cycle exercise mode
-      currentExercise = static_cast<ExerciseMode>((currentExercise + 1) % 3);
-      repCount = 0; // reset reps when changing exercise
+      currentMode = static_cast<Mode>((currentMode + 1) % 4);
+      repCount = 0;
       repState = RESTING;
-      updateAndPrintState();
-      Serial.println("Exercise changed!");
       lastButtonPress = currentTime;
     }
   }
 
-  // --- Read MPU Data ---
-  sensors_event_t a, g, temp;
-  mpu.getEvent(&a, &g, &temp);
+  // --- Read Heart Rate ---
+  long irValue = particleSensor.getIR();
 
+  if (irValue > 7000) { // Check for a finger first!
+    bool beatDetected = checkForBeat(irValue);
+    if (beatDetected) {
+        long delta = millis() - lastBeat;
+        lastBeat = millis();
+        beatsPerMinute = 60 / (delta / 1000.0);
+
+        if (beatsPerMinute > 20 && beatsPerMinute < 255) {
+            rates[rateSpot++] = (byte)beatsPerMinute;
+            rateSpot %= RATE_SIZE;
+            beatAvg = 0;
+            for (byte x = 0; x < RATE_SIZE; x++) beatAvg += rates[x];
+            beatAvg /= RATE_SIZE;
+        }
+    }
+  } else { // No finger is detected
+    beatAvg = 0; // Reset the average so it doesn't show an old value
+  }
+
+
+  // --- Read MPU6050 for rep counting ---
   float angle = 0;
-  if (currentExercise == LATERAL_RAISE) {
-    angle = atan2(a.acceleration.y, a.acceleration.z) * 180 / PI;
-    angle = abs(angle);
-  } else {
-    angle = atan2(-a.acceleration.x, sqrt(a.acceleration.y * a.acceleration.y + a.acceleration.z * a.acceleration.z)) * 180 / PI;
-    angle = map(angle, -90, 90, 0, 180);
+  if (currentMode != HR_ONLY) {
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
+    if (currentMode == LATERAL_RAISE) {
+      angle = atan2(a.acceleration.y, a.acceleration.z) * 180 / PI;
+      angle = abs(angle);
+    } else {
+      angle = atan2(-a.acceleration.x, sqrt(a.acceleration.y*a.acceleration.y + a.acceleration.z*a.acceleration.z)) * 180 / PI;
+      angle = map(angle, -90, 90, 0, 180);
+    }
+
+    // Count reps
+    switch (currentMode) {
+      case BICEP_CURL:    processRep(angle, BICEP_CURL_START_ANGLE, BICEP_CURL_END_ANGLE, true); break;
+      case LATERAL_RAISE: processRep(angle, LATERAL_RAISE_START_ANGLE, LATERAL_RAISE_END_ANGLE, false); break;
+      case SQUAT:         processRep(angle, SQUAT_START_ANGLE, SQUAT_END_ANGLE, false); break;
+      default: break;
+    }
   }
 
-  // --- Rep Counting Logic ---
-  countReps(angle);
+  // --- Display ---
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
 
-  delay(50);
-}
-
-void countReps(float angle) {
-  switch (currentExercise) {
-    case BICEP_CURL: processRep(angle, BICEP_CURL_START_ANGLE, BICEP_CURL_END_ANGLE, true); break;
-    case LATERAL_RAISE: processRep(angle, LATERAL_RAISE_START_ANGLE, LATERAL_RAISE_END_ANGLE, false); break;
-    case SQUAT: processRep(angle, SQUAT_START_ANGLE, SQUAT_END_ANGLE, false); break;
+  switch (currentMode) {
+    case HR_ONLY:
+      display.setCursor(0, 0); 
+      display.println("Mode: Heart Rate");
+      if (irValue < 7000) {
+        display.setTextSize(1);
+        display.setCursor(10, 25);
+        display.println("Place finger on");
+        display.setCursor(10, 35);
+        display.println("the sensor.");
+      } else {
+        display.drawBitmap(5, 15, logo2_bmp, 24, 21, SSD1306_WHITE);
+        display.setTextSize(2);
+        display.setCursor(50, 12);
+        display.println("BPM");
+        display.setCursor(50, 32);
+        display.println(beatAvg);
+      }
+      break;
+    case BICEP_CURL:
+      display.setCursor(0, 0); display.println("Mode: Bicep Curl");
+      display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
+      break;
+    case LATERAL_RAISE:
+      display.setCursor(0, 0); display.println("Mode: Lateral Raise");
+      display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
+      break;
+    case SQUAT:
+      display.setCursor(0, 0); display.println("Mode: Squat");
+      display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
+      break;
   }
+
+  // Display HR in exercise modes if a finger is present
+  if (currentMode != HR_ONLY && irValue > 7000) {
+    display.setTextSize(1);
+    display.setCursor(80, 50);
+    display.print("HR: "); 
+    display.println(beatAvg);
+  }
+
+  display.display();
+  // delay(50);
 }
 
 void processRep(float angle, float startThreshold, float endThreshold, bool inverted) {
   switch (repState) {
     case RESTING:
-      if ((!inverted && angle > startThreshold) || (inverted && angle < startThreshold)) repState = LIFTING;
+      if ((!inverted && angle > endThreshold) || (inverted && angle < endThreshold)) repState = LIFTING;
       break;
     case LIFTING:
-      if ((!inverted && angle > endThreshold) || (inverted && angle < endThreshold)) repState = LOWERING;
-      else if ((!inverted && angle < startThreshold) || (inverted && angle > startThreshold)) repState = RESTING;
+      if ((!inverted && angle < startThreshold) || (inverted && angle > startThreshold)) repState = LOWERING;
       break;
     case LOWERING:
-      if ((!inverted && angle < startThreshold) || (inverted && angle > startThreshold)) {
+      if ((!inverted && angle > endThreshold) || (inverted && angle < endThreshold)) {
         repCount++;
-        updateAndPrintState();
         repState = RESTING;
       }
       break;

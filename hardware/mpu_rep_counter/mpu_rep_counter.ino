@@ -18,6 +18,11 @@ BLECharacteristic* pCharacteristic;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
 
+// --- Button Configuration ---
+#define BUTTON_PIN 25
+unsigned long lastButtonPress = 0;
+const unsigned long debounceDelay = 300; // ms
+
 // --- Exercise Configuration ---
 enum ExerciseMode {
   BICEP_CURL,
@@ -147,6 +152,9 @@ void setup(void) {
   BLEDevice::startAdvertising();
   Serial.println("Characteristic defined! Now advertising...");
 
+  // --- Button Setup ---
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
   updateAndPrintState();
 }
 
@@ -165,6 +173,22 @@ void loop() {
       Serial.println("Restart advertising");
   }
 
+  // --- Button Check ---
+  int buttonState = digitalRead(BUTTON_PIN);
+  if (buttonState == LOW) { // Button pressed
+    unsigned long currentTime = millis();
+    if (currentTime - lastButtonPress > debounceDelay) {
+      // Cycle exercise mode
+      currentExercise = static_cast<ExerciseMode>((currentExercise + 1) % 3);
+      repCount = 0; // reset reps when changing exercise
+      repState = RESTING;
+      updateAndPrintState();
+      Serial.println("Exercise changed!");
+      lastButtonPress = currentTime;
+    }
+  }
+
+  // --- Read MPU Data ---
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
@@ -177,8 +201,9 @@ void loop() {
     angle = map(angle, -90, 90, 0, 180);
   }
 
-  // Rep Counting Logic
+  // --- Rep Counting Logic ---
   countReps(angle);
+
   delay(50);
 }
 

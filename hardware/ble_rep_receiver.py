@@ -1,74 +1,81 @@
-# Python script to receive exercise rep data from the ESP32 via BLE.
-#
-# This script uses the 'bleak' library to scan for, connect to, and receive
-# notifications from the ESP32 Rep Counter.
-#
-# How to use:
-# 1.  Make sure the ESP32 is running the corresponding BLE firmware.
-# 2.  Install the bleak library:
-#     pip install bleak
-# 3.  Run this script from your terminal:
-#     python ble_rep_receiver.py
-# 4.  The script will scan for the ESP32, connect, and print the data
-#     as it is received.
-# 5.  Press Ctrl+C to stop the script.
-#
-# @author Gemini
-# @version 1.0
-
 import asyncio
-from bleak import BleakScanner, BleakClient
+import platform
+import json
+import os
 
-# --- Configuration ---
-# These values must match the UUIDs defined in your ESP32 code.
-DEVICE_NAME = "RepCounterESP32"
+from bleak import BleakClient, BleakScanner
+
+# UUIDs must match the ESP32 sketch
+DEVICE_NAME = "ESP32 Fitness Tracker"
 SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-def notification_handler(sender, data):
-    """Callback function to handle incoming data from BLE notifications."""
+def clear_console():
+    """Clears the console screen."""
+    command = 'cls' if platform.system().lower() == 'windows' else 'clear'
+    os.system(command)
+
+def notification_handler(sender: int, data: bytearray):
+    """Handles incoming data from the BLE characteristic."""
+    message = data.decode('utf-8')
     try:
-        message = data.decode('utf-8')
-        # The message is expected in the format "Exercise Name,RepCount"
-        exercise, reps = message.split(',')
-        print(f"Exercise: {exercise.strip()}, Reps: {reps.strip()}")
+        # Parse the JSON string
+        sensor_data = json.loads(message)
+        
+        # Clear the console for a clean display
+        clear_console()
+
+        # --- MODIFICATION: Print the raw JSON string for debugging ---
+        print(f"Raw JSON Received: {message}\n")
+        # -----------------------------------------------------------
+
+        # Display the formatted data
+        print("--- ESP32 Fitness Tracker ---")
+        print(f"      Mode: {sensor_data.get('mode', 'N/A')}")
+        
+        hr = sensor_data.get('hr', 0)
+        if hr > 0:
+            print(f"Heart Rate: {hr} BPM")
+        else:
+            print("Heart Rate: (No finger detected)")
+            
+        if sensor_data.get('mode') != "HR Only":
+             print(f"      Reps: {sensor_data.get('reps', 'N/A')}")
+        print("-----------------------------")
+
+    except json.JSONDecodeError:
+        print(f"Could not decode JSON: {message}")
     except Exception as e:
-        print(f"Could not parse message: {data} | Error: {e}")
+        print(f"An error occurred: {e}")
+
 
 async def main():
     """Main function to scan, connect, and listen for notifications."""
-    print("Scanning for BLE devices...")
+    print("Scanning for devices...")
     device = await BleakScanner.find_device_by_name(DEVICE_NAME)
 
     if device is None:
-        print(f"Error: Could not find device with name '{DEVICE_NAME}'.")
-        print("Please make sure the ESP32 is powered on and running the correct code.")
+        print(f"Could not find a device named '{DEVICE_NAME}'")
         return
 
     print(f"Found device: {device.name} ({device.address})")
-    print("Connecting...")
 
     async with BleakClient(device) as client:
         if client.is_connected:
-            print(f"Successfully connected to {DEVICE_NAME}")
+            print(f"Connected to {device.name}")
             
             # Subscribe to notifications from the characteristic
             await client.start_notify(CHARACTERISTIC_UUID, notification_handler)
+            print("Subscribed to notifications. Waiting for data...")
             
-            print("\nSubscribed to notifications. Waiting for data...")
-            print("Perform an exercise to see the rep count update.")
-            print("Press Ctrl+C to exit.")
-            
-            # Keep the script alive to receive notifications
+            # Keep the script running to receive notifications
             while client.is_connected:
                 await asyncio.sleep(1)
         else:
-            print(f"Failed to connect to {DEVICE_NAME}")
+            print(f"Failed to connect to {device.name}")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nProgram stopped by user.")
-    except Exception as e:
-        print(f"An error occurred: {e}")

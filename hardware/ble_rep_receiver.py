@@ -25,23 +25,33 @@ def notification_handler(sender: int, data: bytearray):
         # Clear the console for a clean display
         clear_console()
 
-        # --- MODIFICATION: Print the raw JSON string for debugging ---
-        print(f"Raw JSON Received: {message}\n")
-        # -----------------------------------------------------------
-
         # Display the formatted data
         print("--- ESP32 Fitness Tracker ---")
-        print(f"      Mode: {sensor_data.get('mode', 'N/A')}")
+        
+        mode = sensor_data.get('mode', 'N/A')
+        print(f"               Mode: {mode}")
         
         hr = sensor_data.get('hr', 0)
         if hr > 0:
-            print(f"Heart Rate: {hr} BPM")
+            print(f"         Heart Rate: {hr} BPM")
         else:
-            print("Heart Rate: (No finger detected)")
+            print("         Heart Rate: (No finger detected)")
             
-        if sensor_data.get('mode') != "HR Only":
-             print(f"      Reps: {sensor_data.get('reps', 'N/A')}")
+        # Only show reps or "get ready" message in exercise modes
+        if mode != "HR Only":
+            # Check if the 'start' flag is true
+            if sensor_data.get('start', False):
+                print(f"               Reps: {sensor_data.get('reps', 'N/A')}")
+            else:
+                # If 'start' is false, it's the "get ready" period
+                print("\n             >> Get Ready! <<")
+
         print("-----------------------------")
+        
+        # --- MODIFIED ---
+        # Print raw JSON for debugging
+        print(f"Raw JSON: {message}")
+
 
     except json.JSONDecodeError:
         print(f"Could not decode JSON: {message}")

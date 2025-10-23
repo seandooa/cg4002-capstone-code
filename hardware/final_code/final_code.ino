@@ -5,6 +5,20 @@
 #include "heartRate.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <ArduinoJson.h>
+
+// BLE Libraries
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+// --- BLE ---
+BLEServer* pServer = NULL;
+BLECharacteristic* pCharacteristic = NULL;
+bool deviceConnected = false;
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
 // --- MAX30105 Heart Rate Sensor ---
 MAX30105 particleSensor;
@@ -44,41 +58,45 @@ RepState repState = RESTING;
 int repCount = 0;
 
 // --- Thresholds ---
-const float BICEP_CURL_START_ANGLE = 140.0; 
-const float BICEP_CURL_END_ANGLE = 50.0;   
+const float BICEP_CURL_START_ANGLE = 140.0;
+const float BICEP_CURL_END_ANGLE = 50.0;
 const float LATERAL_RAISE_START_ANGLE = 15.0;
-const float LATERAL_RAISE_END_ANGLE = 80.0; 
-const float SQUAT_START_ANGLE = 5.0;      
-const float SQUAT_END_ANGLE = 75.0;   
+const float LATERAL_RAISE_END_ANGLE = 80.0;
+const float SQUAT_START_ANGLE = 5.0;
+const float SQUAT_END_ANGLE = 75.0;
 
 // --- Animation ---
 unsigned long lastAnimationTime = 0;
-const unsigned long animationDuration = 100; // How long the big heart shows
+const unsigned long animationDuration = 100;
 
 // --- Heart Icons (Bitmap data) ---
-static const unsigned char PROGMEM logo2_bmp[] = // Small heart
-{ 0x03, 0xC0, 0xF0, 0x06, 0x71, 0x8C, 0x0C, 0x1B, 0x06, 0x18, 0x0E, 0x02, 0x10, 0x0C, 0x03, 0x10,
-  0x04, 0x01, 0x10, 0x04, 0x01, 0x10, 0x40, 0x01, 0x10, 0x40, 0x01, 0x10, 0xC0, 0x03, 0x08, 0x88,
-  0x02, 0x08, 0xB8, 0x04, 0xFF, 0x37, 0x08, 0x01, 0x30, 0x18, 0x01, 0x90, 0x30, 0x00, 0xC0, 0x60,
-  0x00, 0x60, 0xC0, 0x00, 0x31, 0x80, 0x00, 0x1B, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x04, 0x00,  };
+static const unsigned char PROGMEM logo2_bmp[] = { /* Bitmap data */ };
+static const unsigned char PROGMEM logo3_bmp[] = { /* Bitmap data */ };
 
-// --- ADDED THIS BITMAP for the pulse effect ---
-static const unsigned char PROGMEM logo3_bmp[] = // Big heart
-{ 0x01, 0xF0, 0x0F, 0x80, 0x06, 0x1C, 0x38, 0x60, 0x18, 0x06, 0x60, 0x18, 0x10, 0x01, 0x80, 0x08,
-  0x20, 0x01, 0x80, 0x04, 0x40, 0x00, 0x00, 0x02, 0x40, 0x00, 0x00, 0x02, 0xC0, 0x00, 0x08, 0x03,
-  0x80, 0x00, 0x08, 0x01, 0x80, 0x00, 0x18, 0x01, 0x80, 0x00, 0x1C, 0x01, 0x80, 0x00, 0x14, 0x00,
-  0x80, 0x00, 0x14, 0x00, 0x80, 0x00, 0x14, 0x00, 0x40, 0x10, 0x12, 0x00, 0x40, 0x10, 0x12, 0x00,
-  0x7E, 0x1F, 0x23, 0xFE, 0x03, 0x31, 0xA0, 0x04, 0x01, 0xA0, 0xA0, 0x0C, 0x00, 0xA0, 0xA0, 0x08,
-  0x00, 0x60, 0xE0, 0x10, 0x00, 0x20, 0x60, 0x20, 0x06, 0x00, 0x40, 0x60, 0x03, 0x00, 0x40, 0xC0,
-  0x01, 0x80, 0x01, 0x80, 0x00, 0xC0, 0x03, 0x00, 0x00, 0x60, 0x06, 0x00, 0x00, 0x30, 0x0C, 0x00,
-  0x00, 0x08, 0x10, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x01, 0x80, 0x00  };
+// --- NEW: State tracking variables for BLE ---
+Mode lastSentMode = HR_ONLY;
+int lastSentHR = -1; // Use -1 to ensure the first reading is always sent
+int lastSentReps = -1;
+
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      deviceConnected = true;
+      // Force a data send on new connection
+      lastSentHR = -1; 
+      lastSentReps = -1;
+    };
+
+    void onDisconnect(BLEServer* pServer) {
+      deviceConnected = false;
+    }
+};
 
 
 void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // --- OLED ---
+  // --- OLED Init ---
   if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { 
     Serial.println(F("SSD1306 allocation failed"));
     for(;;);
@@ -86,15 +104,15 @@ void setup() {
   display.display();
   delay(1000);
 
-  // --- MAX30105 ---
+  // --- MAX30105 Init ---
   if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
-    Serial.println("MAX30105 was not found. Please check wiring/power.");
+    Serial.println("MAX30105 was not found.");
     while (1);
   }
   particleSensor.setup();
   particleSensor.setPulseAmplitudeRed(0x0A);
 
-  // --- MPU6050 ---
+  // --- MPU6050 Init ---
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
     while (1) delay(10);
@@ -104,32 +122,44 @@ void setup() {
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
   delay(100);
 
-  // --- Button ---
+  // --- Button Init ---
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  // --- BLE Init ---
+  BLEDevice::init("ESP32 Fitness Tracker");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_NOTIFY
+                    );
+  pCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.println("Waiting for a client connection to notify...");
 }
+
 
 void loop() {
   // --- Button Mode Switch ---
-  int buttonState = digitalRead(BUTTON_PIN);
-  if (buttonState == LOW) {
-    unsigned long currentTime = millis();
-    if (currentTime - lastButtonPress > debounceDelay) {
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    if (millis() - lastButtonPress > debounceDelay) {
       currentMode = static_cast<Mode>((currentMode + 1) % 4);
-      repCount = 0;
+      repCount = 0; // Reset reps on mode change
       repState = RESTING;
-      lastButtonPress = currentTime;
+      lastButtonPress = millis();
     }
   }
 
   // --- Read Heart Rate ---
   long irValue = particleSensor.getIR();
-
-  if (irValue > 7000) { // Check for a finger first!
-    bool beatDetected = checkForBeat(irValue);
-    if (beatDetected) {
-        // --- TRIGGER ANIMATION ---
+  if (irValue > 7000) {
+    if (checkForBeat(irValue)) {
         lastAnimationTime = millis();
-        
         long delta = millis() - lastBeat;
         lastBeat = millis();
         beatsPerMinute = 60 / (delta / 1000.0);
@@ -142,25 +172,20 @@ void loop() {
             beatAvg /= RATE_SIZE;
         }
     }
-  } else { // No finger is detected
-    beatAvg = 0; // Reset the average so it doesn't show an old value
+  } else {
+    beatAvg = 0;
   }
 
-
   // --- Read MPU6050 for rep counting ---
-  float angle = 0;
   if (currentMode != HR_ONLY) {
     sensors_event_t a, g, temp;
     mpu.getEvent(&a, &g, &temp);
+    float angle = 0;
     if (currentMode == LATERAL_RAISE) {
-      angle = atan2(a.acceleration.y, a.acceleration.z) * 180 / PI;
-      angle = abs(angle);
+      angle = abs(atan2(a.acceleration.y, a.acceleration.z) * 180 / PI);
     } else {
-      angle = atan2(-a.acceleration.x, sqrt(a.acceleration.y*a.acceleration.y + a.acceleration.z*a.acceleration.z)) * 180 / PI;
-      angle = map(angle, -90, 90, 0, 180);
+      angle = map(atan2(-a.acceleration.x, sqrt(pow(a.acceleration.y, 2) + pow(a.acceleration.z, 2))) * 180 / PI, -90, 90, 0, 180);
     }
-
-    // Count reps
     switch (currentMode) {
       case BICEP_CURL:    processRep(angle, BICEP_CURL_START_ANGLE, BICEP_CURL_END_ANGLE, true); break;
       case LATERAL_RAISE: processRep(angle, LATERAL_RAISE_START_ANGLE, LATERAL_RAISE_END_ANGLE, false); break;
@@ -173,59 +198,70 @@ void loop() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-
+  String modeName = "HR Only";
   switch (currentMode) {
-    case HR_ONLY:
-      display.setCursor(0, 0); 
-      display.println("Mode: Heart Rate");
-      if (irValue < 7000) {
-        display.setTextSize(1);
-        display.setCursor(10, 25);
-        display.println("Place finger on");
-        display.setCursor(10, 35);
-        display.println("the sensor.");
+    case BICEP_CURL:    modeName = "Bicep Curl"; break;
+    case LATERAL_RAISE: modeName = "Lat Raise"; break;
+    case SQUAT:         modeName = "Squat"; break;
+  }
+  display.setCursor(0,0);
+  display.print("Mode: ");
+  display.println(modeName);
+  if(currentMode == HR_ONLY) {
+     if (irValue < 7000) {
+      display.setCursor(10, 25);
+      display.println("Place finger on sensor");
+    } else {
+      if (millis() - lastAnimationTime < animationDuration) {
+        display.drawBitmap(2, 12, logo3_bmp, 32, 32, SSD1306_WHITE);
       } else {
-        // --- MODIFIED DISPLAY LOGIC FOR ANIMATION ---
-        if (millis() - lastAnimationTime < animationDuration) {
-          // Show big heart on beat
-          display.drawBitmap(2, 12, logo3_bmp, 32, 32, SSD1306_WHITE);
-        } else {
-          // Show small heart otherwise
-          display.drawBitmap(5, 15, logo2_bmp, 24, 21, SSD1306_WHITE);
-        }
-        display.setTextSize(2);
-        display.setCursor(50, 12);
-        display.println("BPM");
-        display.setCursor(50, 32);
-        display.println(beatAvg);
+        display.drawBitmap(5, 15, logo2_bmp, 24, 21, SSD1306_WHITE);
       }
-      break;
-    case BICEP_CURL:
-      display.setCursor(0, 0); display.println("Mode: Bicep Curl");
-      display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
-      break;
-    case LATERAL_RAISE:
-      display.setCursor(0, 0); display.println("Mode: Lateral Raise");
-      display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
-      break;
-    case SQUAT:
-      display.setCursor(0, 0); display.println("Mode: Squat");
-      display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
-      break;
+      display.setTextSize(2);
+      display.setCursor(50, 12); display.println("BPM");
+      display.setCursor(50, 32); display.println(beatAvg);
+    }
+  } else {
+    display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
+    if (irValue > 7000) {
+      display.setTextSize(1);
+      display.setCursor(80, 50);
+      display.print("HR: "); display.println(beatAvg);
+    }
   }
-
-  // Display HR in exercise modes if a finger is present
-  if (currentMode != HR_ONLY && irValue > 7000) {
-    display.setTextSize(1);
-    display.setCursor(80, 50);
-    display.print("HR: "); 
-    display.println(beatAvg);
-  }
-
   display.display();
+
+  // --- Event-Driven BLE Data Transmission ---
+  if (deviceConnected) {
+    // Check if any data has changed
+    if (currentMode != lastSentMode || beatAvg != lastSentHR || repCount != lastSentReps) {
+      StaticJsonDocument<200> doc;
+      doc["mode"] = modeName;
+      doc["hr"] = beatAvg;
+      doc["reps"] = repCount;
+
+      String output;
+      serializeJson(doc, output);
+      
+      pCharacteristic->setValue(output.c_str());
+      pCharacteristic->notify();
+      Serial.println("Change detected, sent: " + output);
+
+      // Update the state variables with the new values
+      lastSentMode = currentMode;
+      lastSentHR = beatAvg;
+      lastSentReps = repCount;
+    }
+  }
+
+  // Handle disconnects by restarting advertising
+  if (!deviceConnected) {
+      pServer->startAdvertising();
+  }
 }
 
 void processRep(float angle, float startThreshold, float endThreshold, bool inverted) {
+  // (processRep function is unchanged)
   switch (repState) {
     case RESTING:
       if ((!inverted && angle > endThreshold) || (inverted && angle < endThreshold)) repState = LIFTING;

@@ -73,17 +73,23 @@ const unsigned long animationDuration = 100;
 static const unsigned char PROGMEM logo2_bmp[] = { /* Bitmap data */ };
 static const unsigned char PROGMEM logo3_bmp[] = { /* Bitmap data */ };
 
-// --- NEW: State tracking variables for BLE ---
+// --- Exercise Start Logic Variables ---
+unsigned long exerciseModeStartTime = 0;
+bool exerciseStarted = false;
+const unsigned long startDelay = 5000; // 5 seconds
+
+// --- State tracking variables for BLE ---
 Mode lastSentMode = HR_ONLY;
-int lastSentHR = -1; // Use -1 to ensure the first reading is always sent
+int lastSentHR = -1;
 int lastSentReps = -1;
+bool lastSentStart = false;
 
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
-      // Force a data send on new connection
       lastSentHR = -1; 
       lastSentReps = -1;
+      lastSentStart = false;
     };
 
     void onDisconnect(BLEServer* pServer) {
@@ -149,9 +155,14 @@ void loop() {
   if (digitalRead(BUTTON_PIN) == LOW) {
     if (millis() - lastButtonPress > debounceDelay) {
       currentMode = static_cast<Mode>((currentMode + 1) % 4);
-      repCount = 0; // Reset reps on mode change
+      repCount = 0; 
       repState = RESTING;
       lastButtonPress = millis();
+      
+      exerciseStarted = false; 
+      if (currentMode != HR_ONLY) {
+          exerciseModeStartTime = millis(); 
+      }
     }
   }
 
@@ -177,68 +188,113 @@ void loop() {
   }
 
   // --- Read MPU6050 for rep counting ---
-  if (currentMode != HR_ONLY) {
-    sensors_event_t a, g, temp;
-    mpu.getEvent(&a, &g, &temp);
-    float angle = 0;
-    if (currentMode == LATERAL_RAISE) {
-      angle = abs(atan2(a.acceleration.y, a.acceleration.z) * 180 / PI);
-    } else {
-      angle = map(atan2(-a.acceleration.x, sqrt(pow(a.acceleration.y, 2) + pow(a.acceleration.z, 2))) * 180 / PI, -90, 90, 0, 180);
-    }
-    switch (currentMode) {
-      case BICEP_CURL:    processRep(angle, BICEP_CURL_START_ANGLE, BICEP_CURL_END_ANGLE, true); break;
-      case LATERAL_RAISE: processRep(angle, LATERAL_RAISE_START_ANGLE, LATERAL_RAISE_END_ANGLE, false); break;
-      case SQUAT:         processRep(angle, SQUAT_START_ANGLE, SQUAT_END_ANGLE, false); break;
-      default: break;
+  if (currentMode != HR_ONLY && exerciseStarted) {
+      sensors_event_t a, g, temp;
+      mpu.getEvent(&a, &g, &temp);
+      float angle = 0;
+      if (currentMode == LATERAL_RAISE) {
+        angle = abs(atan2(a.acceleration.y, a.acceleration.z) * 180 / PI);
+      } else {
+        angle = map(atan2(-a.acceleration.x, sqrt(pow(a.acceleration.y, 2) + pow(a.acceleration.z, 2))) * 180 / PI, -90, 90, 0, 180);
+      }
+      switch (currentMode) {
+        case BICEP_CURL:    processRep(angle, BICEP_CURL_START_ANGLE, BICEP_CURL_END_ANGLE, true); break;
+        case LATERAL_RAISE: processRep(angle, LATERAL_RAISE_START_ANGLE, LATERAL_RAISE_END_ANGLE, false); break;
+        case SQUAT:         processRep(angle, SQUAT_START_ANGLE, SQUAT_END_ANGLE, false); break;
+        default: break;
+      }
+  }
+
+  // --- Check if exercise should be marked as "started" ---
+  if (currentMode != HR_ONLY && !exerciseStarted) {
+    if (millis() - exerciseModeStartTime > startDelay) {
+      exerciseStarted = true;
     }
   }
 
-  // --- Display ---
+  // --- Display Logic ---
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-  String modeName = "HR Only";
+  display.setCursor(0, 0);
+
+  // --- MODIFIED: Display formatting now matches the example code exactly ---
   switch (currentMode) {
-    case BICEP_CURL:    modeName = "Bicep Curl"; break;
-    case LATERAL_RAISE: modeName = "Lat Raise"; break;
-    case SQUAT:         modeName = "Squat"; break;
-  }
-  display.setCursor(0,0);
-  display.print("Mode: ");
-  display.println(modeName);
-  if(currentMode == HR_ONLY) {
-     if (irValue < 7000) {
-      display.setCursor(10, 25);
-      display.println("Place finger on sensor");
-    } else {
-      if (millis() - lastAnimationTime < animationDuration) {
-        display.drawBitmap(2, 12, logo3_bmp, 32, 32, SSD1306_WHITE);
+    case HR_ONLY:
+      display.println("Mode: HR Only");
+      if (irValue < 7000) {
+        display.setCursor(10, 25);
+        display.println("Place finger on sensor");
       } else {
-        display.drawBitmap(5, 15, logo2_bmp, 24, 21, SSD1306_WHITE);
+        if (millis() - lastAnimationTime < animationDuration) {
+          display.drawBitmap(2, 12, logo3_bmp, 32, 32, SSD1306_WHITE);
+        } else {
+          display.drawBitmap(5, 15, logo2_bmp, 24, 21, SSD1306_WHITE);
+        }
+        display.setTextSize(2);
+        display.setCursor(50, 12); display.println("BPM");
+        display.setCursor(50, 32); display.println(beatAvg);
       }
-      display.setTextSize(2);
-      display.setCursor(50, 12); display.println("BPM");
-      display.setCursor(50, 32); display.println(beatAvg);
-    }
-  } else {
-    display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
-    if (irValue > 7000) {
-      display.setTextSize(1);
-      display.setCursor(80, 50);
-      display.print("HR: "); display.println(beatAvg);
-    }
+      break;
+
+    case BICEP_CURL:
+      display.println("Mode: Bicep Curl");
+      if (exerciseStarted) {
+        display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
+      } else {
+        display.setTextSize(2); display.setCursor(10, 20); display.println("Get Ready");
+        int countdown = (startDelay - (millis() - exerciseModeStartTime)) / 1000;
+        display.setTextSize(3); display.setCursor(55, 40); display.println(countdown + 1);
+      }
+      break;
+
+    case LATERAL_RAISE:
+      display.println("Mode: Lat Raise");
+      if (exerciseStarted) {
+        display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
+      } else {
+        display.setTextSize(2); display.setCursor(10, 20); display.println("Get Ready");
+        int countdown = (startDelay - (millis() - exerciseModeStartTime)) / 1000;
+        display.setTextSize(3); display.setCursor(55, 40); display.println(countdown + 1);
+      }
+      break;
+      
+    case SQUAT:
+      display.println("Mode: Squat");
+      if (exerciseStarted) {
+        display.setTextSize(2); display.setCursor(0, 30); display.print("Reps: "); display.println(repCount);
+      } else {
+        display.setTextSize(2); display.setCursor(10, 20); display.println("Get Ready");
+        int countdown = (startDelay - (millis() - exerciseModeStartTime)) / 1000;
+        display.setTextSize(3); display.setCursor(55, 40); display.println(countdown + 1);
+      }
+      break;
   }
+
+  // Show HR in the bottom right corner during exercises if a finger is detected
+  if (currentMode != HR_ONLY && irValue > 7000) {
+    display.setTextSize(1);
+    display.setCursor(80, 50);
+    display.print("HR: "); display.println(beatAvg);
+  }
+
   display.display();
+
 
   // --- Event-Driven BLE Data Transmission ---
   if (deviceConnected) {
-    // Check if any data has changed
-    if (currentMode != lastSentMode || beatAvg != lastSentHR || repCount != lastSentReps) {
+    if (currentMode != lastSentMode || beatAvg != lastSentHR || repCount != lastSentReps || exerciseStarted != lastSentStart) {
       StaticJsonDocument<200> doc;
+      String modeName = "HR Only";
+      switch(currentMode) {
+          case BICEP_CURL: modeName = "Bicep Curl"; break;
+          case LATERAL_RAISE: modeName = "Lat Raise"; break;
+          case SQUAT: modeName = "Squat"; break;
+      }
       doc["mode"] = modeName;
       doc["hr"] = beatAvg;
       doc["reps"] = repCount;
+      doc["start"] = exerciseStarted;
 
       String output;
       serializeJson(doc, output);
@@ -247,10 +303,10 @@ void loop() {
       pCharacteristic->notify();
       Serial.println("Change detected, sent: " + output);
 
-      // Update the state variables with the new values
       lastSentMode = currentMode;
       lastSentHR = beatAvg;
       lastSentReps = repCount;
+      lastSentStart = exerciseStarted;
     }
   }
 
@@ -261,16 +317,16 @@ void loop() {
 }
 
 void processRep(float angle, float startThreshold, float endThreshold, bool inverted) {
-  // (processRep function is unchanged)
   switch (repState) {
     case RESTING:
-      if ((!inverted && angle > endThreshold) || (inverted && angle < endThreshold)) repState = LIFTING;
+      if ((!inverted && angle > startThreshold) || (inverted && angle < startThreshold)) repState = LIFTING;
       break;
     case LIFTING:
-      if ((!inverted && angle < startThreshold) || (inverted && angle > startThreshold)) repState = LOWERING;
+      if ((!inverted && angle > endThreshold) || (inverted && angle < endThreshold)) repState = LOWERING;
+      else if ((!inverted && angle < startThreshold) || (inverted && angle > startThreshold)) repState = RESTING;
       break;
     case LOWERING:
-      if ((!inverted && angle > endThreshold) || (inverted && angle < endThreshold)) {
+      if ((!inverted && angle < startThreshold) || (inverted && angle > startThreshold)) {
         repCount++;
         repState = RESTING;
       }

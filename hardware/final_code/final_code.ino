@@ -6,6 +6,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
+#include "MAX17043.h" // ADDED: Include the fuel gauge library
 
 // BLE Libraries
 #include <BLEDevice.h>
@@ -42,6 +43,11 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define BUTTON_PIN 25
 unsigned long lastButtonPress = 0;
 const unsigned long debounceDelay = 300;
+
+// --- ADDED: Fuel Gauge Variables ---
+int batteryPercent = 0;
+unsigned long lastBatteryReadTime = 0;
+const unsigned long batteryReadInterval = 2000; // Read battery every 2 seconds
 
 // --- Modes ---
 enum Mode {
@@ -142,6 +148,19 @@ void setup() {
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
   delay(100);
 
+  // --- ADDED: MAX17043 Fuel Gauge Init ---
+  Serial.println("Initializing MAX17043...");
+  // Note: Assumes I2C address was changed to 0x32 in the library's .h file
+  if (FuelGauge.begin()) {
+    Serial.println("MAX17043 detected.");
+    FuelGauge.reset();
+    delay(200); // Small delay after reset is acceptable in setup
+  } else {
+    Serial.println("MAX17043 not found. Check I2C wiring/address.");
+    // You might want to display this on the OLED as well
+    while (true);
+  }
+
   // --- Button Init ---
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
@@ -165,6 +184,14 @@ void setup() {
 
 
 void loop() {
+  // --- ADDED: Non-Blocking Battery Reading ---
+  if (millis() - lastBatteryReadTime > batteryReadInterval) {
+    lastBatteryReadTime = millis(); // Reset the timer
+    FuelGauge.quickstart();         // Trigger a new reading (required workaround)
+    // Read immediately after quickstart, removing the original delay()
+    batteryPercent = FuelGauge.percent() / 2;
+  }
+
   // --- Button Mode Switch ---
   if (digitalRead(BUTTON_PIN) == LOW) {
     if (millis() - lastButtonPress > debounceDelay) {
@@ -231,6 +258,12 @@ void loop() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
+
+  // --- ADDED: Display Battery Percentage on Top Right ---
+  display.setCursor(100, 0); // Positioned for "100%"
+  display.print(batteryPercent);
+  display.print("%");
+  display.setCursor(0, 0); // Reset cursor for the mode text
 
   // --- MODIFIED: Display formatting now matches the example code exactly ---
   switch (currentMode) {

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>AR Fitness Tracker</title>
+    <link rel="stylesheet" href="styles.css">
+     
+    <!-- Core Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@latest"></script>
+    
+    <!-- MediaPipe BlazePose for 3D Pose Detection (All Cameras) -->
+    <!-- Provides 33 body landmarks with 3D coordinates (x, y, z) -->
+    <!-- Replaces PoseNet and MoveNet with more accurate detection -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    
+    <!-- Paper.js for illustration utilities (if needed) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paper.js/0.12.15/paper-full.min.js"></script>
+</head>
+<body>
+    <div id="app">
+         
+        <div id="camera-container">
+            <video id="camera-feed" autoplay muted playsinline></video>
+            
+            <canvas id="threejs-overlay"></canvas>
+            <canvas id="ar-overlay"></canvas>
+        </div>
+
+         
+        <div id="side-camera-container">
+            <video id="side-camera-feed" autoplay muted playsinline></video>
+            <canvas id="side-avatar-canvas"></canvas>
+            <div class="side-camera-label">Side View</div>
+        </div>
+
+        
+        <div id="hud">
+             
+            <div id="metrics-panel" class="hud-panel">
+                <h3>Performance Metrics</h3>
+                <div class="metric">
+                    <span class="metric-label">Heart Rate:</span>
+                    <span id="heart-rate" class="metric-value">-- bpm</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Pulse:</span>
+                    <span id="pulse" class="metric-value">-- bpm</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Reps:</span>
+                    <span id="rep-count" class="metric-value">0</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Exercise:</span>
+                    <span id="exercise-type" class="metric-value">Awaiting Command</span>
+                </div>
+                 
+                <div class="metric">
+                    <span class="metric-label">Duration:</span>
+                    <span id="workout-duration" class="metric-value">00:00</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Calories:</span>
+                    <span id="calories-burned" class="metric-value">0</span>
+                </div>
+            </div>
+
+             
+            <div id="feedback-panel" class="hud-panel">
+                <h3>Posture Feedback</h3>
+                <div id="feedback-status" class="feedback-good">Ready</div>
+                <div id="feedback-suggestions">
+                    <ul id="suggestions-list">
+                        <li>Waiting for server command</li>
+                    </ul>
+                </div>
+            </div>
+
+             
+            <div id="connection-panel" class="hud-panel">
+                <h3>Connection Status</h3>
+                <div class="connection-status">
+                    <span class="status-label">Main Camera:</span>
+                    <span id="main-camera-status" class="status-indicator">Disconnected</span>
+                </div>
+                <div class="connection-status">
+                    <span class="status-label">Side Camera:</span>
+                    <span id="side-camera-status" class="status-indicator">Disconnected</span>
+                </div>
+                <div class="connection-status">
+                    <span class="status-label">Relay Server:</span>
+                    <span id="relay-connection-status" class="status-indicator">Connecting</span>
+                </div>
+                <button id="connect-side-camera" class="control-btn">Connect Side Camera</button>
+                <div style="margin-top:8px;font-size:11px;">
+                    <div>Room ID: <span id="side-room-id">--</span></div>
+                    <div id="side-room-hint" style="opacity:0.8"></div>
+                    <div style="margin-top:8px;">
+                        <strong>Relay URL:</strong><br>
+                        <span id="relay-url-display" style="opacity:0.8;word-break:break-all;">Detecting...</span>
+                    </div>
+                </div>
+            </div>
+
+             
+            <div id="control-panel" class="hud-panel">
+                <button id="relay-config" class="control-btn">Relay Settings</button>
+                <button id="toggle-skeleton" class="control-btn">Toggle Skeleton</button>
+                <button id="toggle-avatar" class="control-btn">Toggle Avatar</button>
+                <button id="toggle-fullscreen" class="control-btn mobile-only">Fullscreen</button>
+            </div>
+        </div>
+
+         
+        <div id="status-message" class="status-hidden">
+            Initializing camera...
+        </div>
+
+        <!-- Relay Node Status -->
+        <div id="relay-status-indicator" class="relay-status-disconnected">
+            <span id="relay-status-text">Connecting to Relay Node...</span>
+        </div>
+
+        
+        <div id="summary-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div id="summary-timer">Closing in 5s</div>
+                <h2>Workout Summary</h2>
+                <div id="summary-stats">
+                    <div class="summary-stat">
+                        <span class="stat-label">Exercise:</span>
+                        <span id="summary-exercise">--</span>
+                    </div>
+                    <div class="summary-stat">
+                        <span class="stat-label">Duration:</span>
+                        <span id="summary-duration">--</span>
+                    </div>
+                    <div class="summary-stat">
+                        <span class="stat-label">Total Reps:</span>
+                        <span id="summary-reps">--</span>
+                    </div>
+                    <div class="summary-stat">
+                        <span class="stat-label">Avg Heart Rate:</span>
+                        <span id="summary-heart-rate">--</span>
+                    </div>
+                    <div class="summary-stat">
+                        <span class="stat-label">Calories Burned:</span>
+                        <span id="summary-calories">--</span>
+                    </div>
+                </div>
+                <button id="close-summary" class="control-btn">Close</button>
+            </div>
+        </div>
+
+        <!-- Relay Node Configuration Modal -->
+        <div id="relay-config-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <h2>Relay Node Configuration</h2>
+                <div class="config-section">
+                    <div class="config-item">
+                        <label>
+                            <input type="checkbox" id="relay-enabled" checked disabled> Relay Node Communication (Always Enabled)
+                        </label>
+                    </div>
+                    <div class="config-item">
+                        <label for="relay-url">WebSocket URL:</label>
+                        <input type="text" id="relay-url" value="" placeholder="Auto-detected (will be shown in console)">
+                    </div>
+                    <div class="config-item">
+                        <label for="relay-reconnect-interval">Reconnect Interval (ms):</label>
+                        <input type="number" id="relay-reconnect-interval" value="5000" min="1000" max="30000">
+                    </div>
+                    <div class="config-item">
+                        <label for="relay-max-reconnect">Max Reconnect Attempts:</label>
+                        <input type="number" id="relay-max-reconnect" value="10" min="1" max="50">
+                    </div>
+                </div>
+                <div class="relay-status">
+                    <span id="relay-status-text">Disconnected from Relay Node</span>
+                </div>
+                <div class="modal-buttons">
+                    <button id="save-relay-config" class="control-btn">Save Configuration</button>
+                    <button id="test-relay-connection" class="control-btn">Test Connection</button>
+                    <button id="close-relay-config" class="control-btn">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/pose-detection.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/signaling.js"></script>
+    <script src="js/relay-config.js"></script>
+    <script>
+        // Clear old relay configuration - will be auto-configured with detected IP
+        (function() {
+            console.log('Clearing old relay configuration...');
+            console.log('Relay will be auto-configured with detected IP address');
+            
+            // Clear any old relay configuration
+            localStorage.removeItem('relayNodeConfig');
+            localStorage.removeItem('relayNodeUrl');
+            localStorage.removeItem('relayNodeEnabled');
+            localStorage.removeItem('relayNodeReconnectInterval');
+            localStorage.removeItem('relayNodeMaxReconnectAttempts');
+        })();
+    </script>
+    <script src="js/ar-renderer.js"></script>
+    <script src="js/dummy-data.js"></script>
+    <script src="js/utils/demoUtils.js"></script>
+    <script src="js/utils/svgUtils.js"></script>
+    <script src="js/illustrationGen/illustration.js"></script>
+    <script src="js/illustrationGen/skeleton.js"></script>
+    <script src="js/side-camera-manager.js"></script>
+
+    <!-- New Integrated Avatar System -->
+    <script src="js/pose-animator-utils.js"></script>
+    <script src="js/enhanced-pose-detection.js"></script>
+    <script src="js/avatar-pose-mapper.js"></script>
+    <script src="js/integrated-avatar-system.js"></script>
+    <script src="js/app-methods.js"></script>
+    <script src="js/threejs-renderer.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, orientation=landscape">
+    <title>Side Camera Sender</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="hud-panel" style="margin:16px">
+        <h3>Side Camera Sender</h3>
+        <div style="margin-bottom:8px">
+            <label>Room ID:</label>
+            <input id="room-id" placeholder="Enter Room ID" style="width: 220px" />
+            <button id="join">Join</button>
+        </div>
+        <div id="status">Idle</div>
+        <video id="preview" autoplay muted playsinline style="width:100%;max-width:480px;margin-top:8px;border:1px solid #333"></video>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/signaling.js"></script>
+    <script>
+    (function(){
+      const joinBtn = document.getElementById('join')
+      const roomInput = document.getElementById('room-id')
+      const statusEl = document.getElementById('status')
+      const preview = document.getElementById('preview')
+
+      const params = new URLSearchParams(location.search)
+      const prefill = params.get('roomId')
+      if (prefill) roomInput.value = prefill
+
+      let pc = null
+      let signaling = null
+
+      function setStatus(text){ statusEl.textContent = text }
+
+      joinBtn.addEventListener('click', async () => {
+        const roomId = roomInput.value.trim()
+        if (!roomId) return alert('Enter room ID')
+        try {
+          setStatus('Requesting camera...')
+          
+          // Check if we're in a secure context
+          if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+            throw new Error('Camera access requires HTTPS or localhost. Please use HTTPS or access via localhost.')
+          }
+          
+          // Request camera with better error handling
+          let stream
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ 
+              video: { 
+                facingMode: 'environment',
+                width: { ideal: 640 },
+                height: { ideal: 480 }
+              }, 
+              audio: false 
+            })
+          } catch (cameraError) {
+            console.error('Camera access error:', cameraError)
+            if (cameraError.name === 'NotAllowedError') {
+              throw new Error('Camera permission denied. Please allow camera access and try again.')
+            } else if (cameraError.name === 'NotFoundError') {
+              throw new Error('No camera found on this device.')
+            } else if (cameraError.name === 'NotSupportedError') {
+              throw new Error('Camera not supported in this browser.')
+            } else {
+              throw new Error(`Camera error: ${cameraError.message}`)
+            }
+          }
+          
+          preview.srcObject = stream
+
+          setStatus('Initializing signaling...')
+          try {
+            signaling = new window.FirebaseSignaling()
+            await signaling.initialize()
+            setStatus('Signaling initialized successfully')
+          } catch (signalingError) {
+            console.error('Signaling initialization failed:', signalingError)
+            throw new Error('Failed to initialize signaling. Please check your internet connection and try again.')
+          }
+
+          setStatus('Creating peer connection...')
+          try {
+            pc = new RTCPeerConnection({ 
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+              ] 
+            })
+            setStatus('Peer connection created successfully')
+          } catch (pcError) {
+            console.error('Peer connection creation failed:', pcError)
+            throw new Error('Failed to create peer connection. Your browser may not support WebRTC.')
+          }
+
+          stream.getTracks().forEach(t => pc.addTrack(t, stream))
+
+          pc.onicecandidate = async (event) => {
+            if (event.candidate) {
+              await signaling.addCalleeIce(event.candidate)
+            }
+          }
+
+          // Listen for offer
+          setStatus('Setting up room connection...')
+          try {
+            signaling.roomDoc = signaling.db.collection('webrtcRooms').doc(roomId)
+            signaling.callerCandidates = signaling.roomDoc.collection('callerCandidates')
+            signaling.calleeCandidates = signaling.roomDoc.collection('calleeCandidates')
+            setStatus('Room connection setup complete')
+          } catch (roomError) {
+            console.error('Room setup failed:', roomError)
+            throw new Error('Failed to setup room connection. Please check the room ID and try again.')
+          }
+
+          signaling.onOffer(async (offer) => {
+            try {
+              if (!pc.currentRemoteDescription) {
+                setStatus('Processing offer...')
+                await pc.setRemoteDescription(offer)
+                const answer = await pc.createAnswer()
+                await pc.setLocalDescription(answer)
+                await signaling.joinRoom(roomId, answer)
+                setStatus('Joined room and sent answer')
+              }
+            } catch (offerError) {
+              console.error('Offer processing failed:', offerError)
+              setStatus('Failed to process offer: ' + offerError.message)
+            }
+          })
+
+          // Apply remote ICE from caller
+          signaling.onCallerIce(async (candidate) => {
+            try { await pc.addIceCandidate(candidate) } catch(e) { console.warn('addIceCandidate failed', e) }
+          })
+
+          setStatus('Waiting for offer...')
+          
+          // Add timeout for connection
+          const connectionTimeout = setTimeout(() => {
+            if (pc && pc.connectionState !== 'connected') {
+              setStatus('Connection timeout. Please check the room ID and try again.')
+              console.error('Connection timeout - no offer received')
+            }
+          }, 30000) // 30 second timeout
+          
+          // Clear timeout when connected
+          pc.onconnectionstatechange = () => {
+            if (pc.connectionState === 'connected') {
+              clearTimeout(connectionTimeout)
+              setStatus('Connected successfully!')
+            } else if (pc.connectionState === 'failed') {
+              clearTimeout(connectionTimeout)
+              setStatus('Connection failed. Please try again.')
+            }
+          }
+        } catch (e) {
+          console.error('Connection error:', e)
+          setStatus('Failed: ' + e.message)
+          
+          // Clean up on error
+          if (stream) {
+            stream.getTracks().forEach(track => track.stop())
+          }
+          if (pc) {
+            pc.close()
+            pc = null
+          }
+          if (signaling) {
+            signaling = null
+          }
+        }
+      })
+    })()
+    </script>
+</body>
+</html>
+
+

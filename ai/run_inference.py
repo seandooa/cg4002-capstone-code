@@ -21,7 +21,7 @@ if __name__ == 'main':
     nn.register_map.CTRL.AUTO_RESTART = 1
     nn.register_map.CTRL.AP_START = 1
 
-    input_buffer = allocate(shape=(52,), dtype=np.float32)
+    input_buffer = allocate(shape=(59,), dtype=np.float32)
     output_buffer = allocate(shape=(1,), dtype=np.float32)
     #inference(data)
 

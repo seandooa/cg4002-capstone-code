@@ -1,35 +1,39 @@
 #include "imu_handler.h"
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
+#include <math.h> 
 
 Adafruit_MPU6050 mpu;
 
+// --- State for Arm Exercises ---
 enum RepState { RESTING, LIFTING, LOWERING };
 RepState repState = RESTING;
+
+// --- State for Squat Exercise ---
+enum SquatState { SQUAT_REST, SQUATTING_DOWN, SQUATTING_UP };
+SquatState squatState = SQUAT_REST;
+
 int repCount = 0;
 
 // (Your threshold constants go here or in the .h file)
+// const float SQUAT_DOWN_THRESHOLD = 8.5;
+// const float SQUAT_UP_THRESHOLD   = 11.5;
 
-// Helper function, internal to this file
+// --- Helper for Arm Exercises ---
 void processRep(float angle, float startThreshold, float endThreshold, bool inverted) {
+  // (This function is unchanged)
   switch (repState) {
     case RESTING:
-      // If inverted: transition when angle < start (e.g., 159 < 160)
       if ((!inverted && angle > startThreshold) || (inverted && angle < startThreshold))
         repState = LIFTING;
       break;
-
     case LIFTING:
-      // If inverted: transition when angle < end (e.g., 109 < 110)
       if ((!inverted && angle > endThreshold) || (inverted && angle < endThreshold))
         repState = LOWERING;
-      // Return to rest if movement is reversed
       else if ((!inverted && angle < startThreshold) || (inverted && angle > startThreshold))
         repState = RESTING;
       break;
-
     case LOWERING:
-      // If inverted: count when angle > start (e.g., 161 > 160)
       if ((!inverted && angle < startThreshold) || (inverted && angle > startThreshold)) {
         repCount++;
         repState = RESTING;
@@ -38,7 +42,41 @@ void processRep(float angle, float startThreshold, float endThreshold, bool inve
   }
 }
 
+// --- MODIFIED: Helper for Squat Exercises ---
+void processSquat(float magnitude) {
+  switch (squatState) {
+    case SQUAT_REST:
+      // We are standing. Wait for the "down" motion (mag < 8.5).
+      // This is the "Down-Accel"
+      if (magnitude < SQUAT_DOWN_THRESHOLD) {
+        squatState = SQUATTING_DOWN;
+      }
+      break;
+
+    case SQUATTING_DOWN:
+      // We are down. Wait for the "up" motion (mag > 11.5).
+      // This is the "Down-Brake" OR "Up-Accel"
+      if (magnitude > SQUAT_UP_THRESHOLD) {
+        squatState = SQUATTING_UP;
+      }
+      break;
+
+    case SQUATTING_UP:
+      // We are in the "up" motion (or paused).
+      // Wait for the "brake" at the top (mag < 8.5).
+      // This signifies the *end* of the rep and the start of the next.
+      if (magnitude < SQUAT_DOWN_THRESHOLD) {
+        repCount++; // Count the completed rep.
+        // We are now at the start of the next rep's "down" motion.
+        squatState = SQUATTING_DOWN; 
+      }
+      break;
+  }
+}
+
+
 void setup_imu() {
+  // (This function is unchanged)
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
     while (1) delay(10);
@@ -50,42 +88,42 @@ void setup_imu() {
 }
 
 void update_rep_counter(Mode currentMode) {
+  // (This function is unchanged)
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
-  float angle = 0;
 
-  // MODIFIED: This "pitch" angle calculation works for both
-  // Bicep Curl (180 -> ~0) and Lateral Raise (180 -> 90)
-  angle = map(atan2(-a.acceleration.x,
-                    sqrt(pow(a.acceleration.y, 2) + pow(a.acceleration.z, 2))) * 180 / PI,
-              -90, 90, 0, 180);
-  
-  // The "roll" calculation was incorrect for your sensor's orientation
-  // if (currentMode == LATERAL_RAISE) { ... } else { ... } block is removed.
+  if (currentMode == SQUAT) {
+    float magnitude = sqrt(pow(a.acceleration.x, 2) + 
+                         pow(a.acceleration.y, 2) + 
+                         pow(a.acceleration.z, 2));
+    processSquat(magnitude);
 
-  switch (currentMode) {
-    case BICEP_CURL:
-      // Bicep curl: inverted logic (180 -> 50)
-      processRep(angle, BICEP_CURL_START_ANGLE, BICEP_CURL_END_ANGLE, true);
-      break;
-    case LATERAL_RAISE:
-      // MODIFIED: Lateral raise: inverted logic (180 -> 90)
-      processRep(angle, LATERAL_RAISE_START_ANGLE, LATERAL_RAISE_END_ANGLE, true);
-      break;
-    case SQUAT:
-      // This will still not work correctly
-      processRep(angle, SQUAT_START_ANGLE, SQUAT_END_ANGLE, false);
-      break;
-    default:
-      break;
+  } else {
+    float angle = map(atan2(-a.acceleration.x,
+                      sqrt(pow(a.acceleration.y, 2) + pow(a.acceleration.z, 2))) * 180 / PI,
+                -90, 90, 0, 180);
+
+    switch (currentMode) {
+      case BICEP_CURL:
+        processRep(angle, BICEP_CURL_START_ANGLE, BICEP_CURL_END_ANGLE, true);
+        break;
+      case LATERAL_RAISE:
+        processRep(angle, LATERAL_RAISE_START_ANGLE, LATERAL_RAISE_END_ANGLE, true);
+        break;
+      default:
+        break;
+    }
   }
 }
 
 int get_rep_count() {
+  // (This function is unchanged)
   return repCount;
 }
 
 void reset_reps() {
+  // (This function is unchanged)
   repCount = 0;
   repState = RESTING;
+  squatState = SQUAT_REST;
 }

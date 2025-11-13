@@ -28,7 +28,7 @@ def preprocess_image(imagePath):
     normalized = resized.astype(np.float32) / 255.0
     return normalized.transpose(2, 0, 1)
 
-def get_poses(image_path):
+def get_poses(pose_model, image_path):
     path = f'images/{image_path}'
     image = cv2.imread(path)
     if image is None:
@@ -52,8 +52,8 @@ def cos_angle_between_points(A, B, C, D):
     return dot_product / (mag_AB * mag_CD)
 
 
-def get_and_process_pose(image_path, exercise):
-    poses = get_poses(image_path)
+def get_and_process_pose(pose_model, image_path, exercise):
+    poses = get_poses(pose_model, image_path)
 
     #augment poses
     poses = poses[0]
@@ -141,14 +141,15 @@ class NNDataset(Dataset):
         pose = get_and_process_pose(self.imagePaths[idx], self.exercises[idx])
         return pose
 
-def preprocessing(imageList, batchSize):
+def preprocessing(pose_model, imageList):
     images = [imagePath.split("/")[-1] for imagePath in imageList]
     exercises = [int(img[1]) - 1 for img in images] #ex_idx.png/jpg, to get the exercise type
 
-    dataset = NNDataset(np.array(imageList), np.array(exercises))
-    dataloader = DataLoader(dataset, batch_size=batchSize)
-
-    return dataloader
+    pose_list = []
+    for i in range(len(images)):
+        pose_list.append(get_and_process_pose(pose_model, images[i], exercises[i]))
+    
+    return pose_list
 
 #if __name__ == "__main__":
-#    preprocessing(["e1_1.png", "e3_2.png", "e3_1.png"], 64)
+#    preprocessing(pose_model, ["e1_1.png", "e3_2.png", "e3_1.png"])

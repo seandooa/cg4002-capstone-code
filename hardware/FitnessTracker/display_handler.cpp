@@ -65,8 +65,21 @@ void update_display(Mode currentMode, int beatAvg, int repCount, bool exerciseSt
       case HR_ONLY:
         display.println("Mode: HR Only");
         if (irValue < 7000) {
-          display.setCursor(10, 25);
-          display.println("Place finger on sensor");
+          // --- New Centered, Two-Line Code ---
+          int16_t x1, y1;
+          uint16_t w, h;
+
+          const char* line1 = "Place device";
+          display.getTextBounds(line1, 0, 0, &x1, &y1, &w, &h);
+          display.setCursor((SCREEN_WIDTH - w) / 2, 25);
+          display.println(line1);
+
+          const char* line2 = "on wrist";
+          display.getTextBounds(line2, 0, 0, &x1, &y1, &w, &h);
+          // Position 10px below the first line (8px font + 2px padding)
+          display.setCursor((SCREEN_WIDTH - w) / 2, 35); 
+          display.println(line2);
+          // --- End of New Code ---
         } else {
           if (millis() - get_last_animation_time() < animationDuration) {
             display.drawBitmap(2, 12, logo3_bmp, 32, 32, SSD1306_WHITE);

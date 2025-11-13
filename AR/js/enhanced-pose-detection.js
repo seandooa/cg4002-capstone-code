@@ -325,8 +325,9 @@ class RepCounter {
         if (!pose || !pose.keypoints) return this.lastRepCount
         
         switch (exerciseType) {
-            case 'push-ups':
-                return this.countPushUps(pose)
+            case 'Hr Only':
+                // No rep counting for HR only mode
+                return this.lastRepCount
             case 'bicep-curls':
                 return this.countBicepCurls(pose)
             case 'lateral-raises':

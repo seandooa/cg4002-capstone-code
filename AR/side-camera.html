@@ -10,9 +10,19 @@
     <div class="hud-panel" style="margin:16px">
         <h3>Side Camera Sender</h3>
         <div style="margin-bottom:8px">
-            <label>Room ID:</label>
-            <input id="room-id" placeholder="Enter Room ID" style="width: 220px" />
+            <label>Select Room:</label>
+            <select id="room-select" style="width: 220px; margin-bottom: 8px;">
+                <option value="">Loading rooms...</option>
+            </select>
+            <button id="refresh-rooms" style="margin-left: 4px;">Refresh</button>
+        </div>
+        <div style="margin-bottom:8px">
+            <label>Or Enter Room ID:</label>
+            <input id="room-id" placeholder="Enter Room ID manually" style="width: 180px" />
+        </div>
+        <div style="margin-bottom:8px">
             <button id="join">Join</button>
+            <button id="disconnect" style="display: none; margin-left: 8px;">Disconnect</button>
         </div>
         <div id="status">Idle</div>
         <video id="preview" autoplay muted playsinline style="width:100%;max-width:480px;margin-top:8px;border:1px solid #333"></video>
@@ -23,22 +33,125 @@
     <script>
     (function(){
       const joinBtn = document.getElementById('join')
+      const disconnectBtn = document.getElementById('disconnect')
       const roomInput = document.getElementById('room-id')
+      const roomSelect = document.getElementById('room-select')
+      const refreshBtn = document.getElementById('refresh-rooms')
       const statusEl = document.getElementById('status')
       const preview = document.getElementById('preview')
 
       const params = new URLSearchParams(location.search)
       const prefill = params.get('roomId')
-      if (prefill) roomInput.value = prefill
+      if (prefill) {
+        roomInput.value = prefill
+        roomSelect.value = prefill
+      }
 
       let pc = null
       let signaling = null
+      let currentRoomId = null
 
       function setStatus(text){ statusEl.textContent = text }
 
+      // Load recent rooms
+      async function loadRecentRooms() {
+        try {
+          if (!signaling) {
+            signaling = new window.FirebaseSignaling()
+            await signaling.initialize()
+          }
+          
+          setStatus('Loading rooms...')
+          const rooms = await signaling.getRecentRooms(3)
+          
+          roomSelect.innerHTML = '<option value="">Select a room...</option>'
+          
+          if (rooms.length === 0) {
+            roomSelect.innerHTML = '<option value="">No rooms available</option>'
+            setStatus('No recent rooms found')
+          } else {
+            rooms.forEach(room => {
+              const option = document.createElement('option')
+              option.value = room.id
+              option.textContent = `${room.id} (${room.createdAtFormatted})`
+              roomSelect.appendChild(option)
+            })
+            setStatus(`Found ${rooms.length} room(s)`)
+          }
+          
+          // Also run cleanup of old rooms
+          signaling.cleanupOldRooms(24).catch(err => {
+            console.error('Cleanup failed:', err)
+          })
+        } catch (error) {
+          console.error('Error loading rooms:', error)
+          setStatus('Failed to load rooms: ' + error.message)
+          roomSelect.innerHTML = '<option value="">Error loading rooms</option>'
+        }
+      }
+
+      // Handle room selection
+      roomSelect.addEventListener('change', (e) => {
+        const selectedRoomId = e.target.value
+        if (selectedRoomId) {
+          roomInput.value = selectedRoomId
+        }
+      })
+
+      // Handle refresh button
+      refreshBtn.addEventListener('click', () => {
+        loadRecentRooms()
+      })
+
+      // Handle disconnect button
+      disconnectBtn.addEventListener('click', async () => {
+        if (!currentRoomId) return
+        
+        try {
+          setStatus('Disconnecting and deleting room...')
+          
+          // Close peer connection
+          if (pc) {
+            pc.close()
+            pc = null
+          }
+          
+          // Stop video stream
+          if (preview.srcObject) {
+            preview.srcObject.getTracks().forEach(track => track.stop())
+            preview.srcObject = null
+          }
+          
+          // Delete room from Firebase
+          if (signaling && currentRoomId) {
+            await signaling.deleteRoom(currentRoomId)
+            setStatus('Room deleted and disconnected')
+          } else {
+            setStatus('Disconnected')
+          }
+          
+          // Reset UI
+          currentRoomId = null
+          disconnectBtn.style.display = 'none'
+          joinBtn.disabled = false
+          roomSelect.disabled = false
+          roomInput.disabled = false
+          
+          // Reload rooms list
+          loadRecentRooms()
+        } catch (error) {
+          console.error('Error disconnecting:', error)
+          setStatus('Error disconnecting: ' + error.message)
+        }
+      })
+
+      // Initial load
+      loadRecentRooms()
+
       joinBtn.addEventListener('click', async () => {
-        const roomId = roomInput.value.trim()
-        if (!roomId) return alert('Enter room ID')
+        const roomId = roomInput.value.trim() || roomSelect.value.trim()
+        if (!roomId) return alert('Select or enter a room ID')
+        currentRoomId = roomId
         try {
           setStatus('Requesting camera...')
           
@@ -153,6 +266,11 @@
             if (pc.connectionState === 'connected') {
               clearTimeout(connectionTimeout)
               setStatus('Connected successfully!')
+              // Show disconnect button and disable join
+              disconnectBtn.style.display = 'inline-block'
+              joinBtn.disabled = true
+              roomSelect.disabled = true
+              roomInput.disabled = true
             } else if (pc.connectionState === 'failed') {
               clearTimeout(connectionTimeout)
               setStatus('Connection failed. Please try again.')

@@ -70,8 +70,9 @@ FitnessARApp.prototype.generatePostureFeedback = function(pose, exerciseType) {
   };
   
   switch (exerciseType) {
-    case 'push-ups':
-      feedback = this.analyzePushUpPosture(keypoints);
+    case 'Hr Only':
+      // No posture analysis for HR only mode
+      feedback.suggestions.push("Monitoring heart rate");
       break;
     case 'bicep-curls':
       feedback = this.analyzeBicepCurlPosture(keypoints);
@@ -230,7 +231,7 @@ FitnessARApp.prototype.updatePostureFeedback = function(feedback) {
 FitnessARApp.prototype.calculateCalories = function(reps, exerciseType) {
   // Rough calorie estimation based on exercise type and reps
   const caloriesPerRep = {
-    'push-ups': 0.5,
+    'Hr Only': 0.0,
     'bicep-curls': 0.3,
     'lateral-raises': 0.4,
     'squats': 0.6
@@ -247,6 +248,24 @@ FitnessARApp.prototype.playRepCompletionSound = function() {
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
     
+    // Configure oscillator for a subtle beep
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(400, audioContext.currentTime + 0.1);
+    
+    // Configure gain for subtle volume
+    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+    
     oscillator.connect(gainNode);
     gainNode.connect(audioContext.destination);
+    
+    // Play the sound
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.1);
+  } catch (error) {
+    // Silently fail if audio is not available
+    console.log('Audio feedback not available:', error);
+  }
+};
 

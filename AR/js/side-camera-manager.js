@@ -1108,7 +1108,7 @@ class SideCameraManager {
     console.log("Side camera pose detection stopped")
   }
 
-  disconnectSideCamera() {
+  async disconnectSideCamera() {
     // Stop pose detection
     this.stopSidePoseDetection()
 
@@ -1137,7 +1137,20 @@ class SideCameraManager {
       this.poseAnimatorCanvasScope.project.clear()
     }
 
+    // Delete room from Firebase if we have a room ID
+    if (this.roomId && this.signaling) {
+      try {
+        console.log(`Deleting room ${this.roomId} from Firebase...`)
+        await this.signaling.deleteRoom(this.roomId)
+        console.log(`Room ${this.roomId} deleted successfully`)
+      } catch (error) {
+        console.error('Error deleting room:', error)
+        // Continue with disconnection even if deletion fails
+      }
+    }
+
     // Reset room ID
+    const roomIdToReset = this.roomId
     this.roomId = null
     const roomElement = document.getElementById("side-room-id")
     if (roomElement) {
@@ -1145,7 +1158,7 @@ class SideCameraManager {
     }
 
     this.updateConnectionStatus(false)
-    console.log("Side camera disconnected")
+    console.log("Side camera disconnected" + (roomIdToReset ? ` (room ${roomIdToReset} deleted)` : ""))
   }
 
   showRoomId(roomId) {

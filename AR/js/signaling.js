@@ -112,6 +112,111 @@
         document.head.appendChild(s)
       })
     }
+
+    // Fetch recent room IDs (most recent 3)
+    async getRecentRooms(limit = 3) {
+      if (!this.db) throw new Error('Firebase not initialized')
+      
+      try {
+        // Get all rooms and filter/sort by createdAt
+        const snapshot = await this.db.collection('webrtcRooms').get()
+        
+        const rooms = []
+        snapshot.forEach(doc => {
+          const data = doc.data()
+          // Only include rooms with createdAt timestamp
+          if (data.createdAt) {
+            rooms.push({
+              id: doc.id,
+              createdAt: data.createdAt,
+              createdAtFormatted: new Date(data.createdAt).toLocaleString()
+            })
+          }
+        })
+        
+        // Sort by createdAt (most recent first) and limit
+        rooms.sort((a, b) => b.createdAt - a.createdAt)
+        return rooms.slice(0, limit)
+      } catch (error) {
+        console.error('Error fetching recent rooms:', error)
+        return []
+      }
+    }
+
+    // Delete a room by ID
+    async deleteRoom(roomId) {
+      if (!this.db) throw new Error('Firebase not initialized')
+      
+      try {
+        const roomRef = this.db.collection('webrtcRooms').doc(roomId)
+        
+        // Delete subcollections (callerCandidates and calleeCandidates)
+        const callerCandidates = await roomRef.collection('callerCandidates').get()
+        const calleeCandidates = await roomRef.collection('calleeCandidates').get()
+        
+        const deletePromises = []
+        
+        callerCandidates.forEach(doc => {
+          deletePromises.push(doc.ref.delete())
+        })
+        
+        calleeCandidates.forEach(doc => {
+          deletePromises.push(doc.ref.delete())
+        })
+        
+        await Promise.all(deletePromises)
+        
+        // Delete the room document
+        await roomRef.delete()
+        
+        console.log(`Room ${roomId} deleted successfully`)
+        return true
+      } catch (error) {
+        console.error('Error deleting room:', error)
+        throw error
+      }
+    }
+
+    // Clean up rooms older than specified hours (default 24 hours)
+    async cleanupOldRooms(maxAgeHours = 24) {
+      if (!this.db) throw new Error('Firebase not initialized')
+      
+      try {
+        const cutoffTime = Date.now() - (maxAgeHours * 60 * 60 * 1000)
+        
+        // Get all rooms and filter by createdAt (handles rooms without createdAt by deleting them too)
+        const snapshot = await this.db.collection('webrtcRooms').get()
+        
+        const deletePromises = []
+        
+        snapshot.forEach((doc) => {
+          const data = doc.data()
+          const createdAt = data.createdAt || 0
+          const roomId = doc.id
+          
+          // Delete if room is older than cutoff OR if createdAt doesn't exist (legacy rooms)
+          if (createdAt < cutoffTime || !data.createdAt) {
+            deletePromises.push(
+              this.deleteRoom(roomId).catch(error => {
+                console.error(`Failed to delete room ${roomId}:`, error)
+                return false
+              })
+            )
+          }
+        })
+        
+        const results = await Promise.all(deletePromises)
+        const deletedCount = results.filter(r => r === true).length
+        
+        if (deletedCount > 0) {
+          console.log(`Cleaned up ${deletedCount} old room(s)`)
+        }
+        return deletedCount
+      } catch (error) {
+        console.error('Error cleaning up old rooms:', error)
+        return 0
+      }
+    }
   }
 
   window.FirebaseSignaling = FirebaseSignaling

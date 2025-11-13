@@ -19,6 +19,8 @@ class FitnessARApp {
 
     // Workout tracking
     this.workoutStartTime = null
+    this.exerciseStartTime = null  // Track when exercise actually starts (not just workout start)
+    this.exerciseStarted = false   // Track if exercise has actually started
     this.workoutStats = {
       duration: 0,
       totalReps: 0,
@@ -554,6 +556,14 @@ class FitnessARApp {
 
   // Server command handlers
   handleServerExerciseSelection(exerciseType) {
+    // Validate exercise type - use "Hr Only" if empty or invalid
+    const validExercises = ['Hr Only', 'lateral-raises', 'squats', 'bicep-curls']
+    
+    if (!exerciseType || exerciseType.trim() === '' || !validExercises.includes(exerciseType)) {
+      console.warn(`Invalid or empty exercise type: "${exerciseType}". Defaulting to "Hr Only"`)
+      exerciseType = 'Hr Only'
+    }
+    
     console.log(`Server selected exercise: ${exerciseType}`)
     
     this.currentExercise = exerciseType
@@ -626,18 +636,19 @@ class FitnessARApp {
   // ========================================================================
 
   updateMetricsFromServer(metrics) {
-    console.log('Updating metrics from server:', metrics)
+    // Always log when updating metrics from server
+    console.log('[UI Update] Updating metrics display from server:', {
+      heartRate: metrics.heartRate,
+      pulse: metrics.pulse,
+      repCount: metrics.repCount,
+      workoutDuration: metrics.workoutDuration,
+      caloriesBurned: metrics.caloriesBurned
+    })
     
     // Update heart rate
     const heartRateElement = document.getElementById("heart-rate")
     if (heartRateElement && metrics.heartRate !== undefined) {
       heartRateElement.textContent = `${metrics.heartRate} bpm`
-    }
-
-    // Update pulse
-    const pulseElement = document.getElementById("pulse")
-    if (pulseElement && metrics.pulse !== undefined) {
-      pulseElement.textContent = `${metrics.pulse} bpm`
     }
 
     // Update rep count
@@ -650,28 +661,53 @@ class FitnessARApp {
       }
     }
 
-    // Update workout duration
+    // Update workout duration - only start timer when exercise actually starts
+    // For HR only mode, always keep timer at 00:00
     const durationElement = document.getElementById("workout-duration")
-    if (durationElement && metrics.workoutDuration !== undefined) {
-      const minutes = Math.floor(metrics.workoutDuration / 60)
-      const seconds = metrics.workoutDuration % 60
-      durationElement.textContent = `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
-      // Store for workout stats
-      if (this.workoutStats) {
-        this.workoutStats.duration = metrics.workoutDuration
+    if (durationElement) {
+      // Check if in HR only mode
+      if (this.currentExercise === 'Hr Only') {
+        // HR only mode: always show 00:00
+        durationElement.textContent = "00:00"
+        if (this.workoutStats) {
+          this.workoutStats.duration = 0
+        }
+      } else {
+        // For other exercises, check if exercise has actually started
+        // Exercise starts when we get the first rep (repCount > 0) or when server sends workoutDuration > 0
+        if (!this.exerciseStarted && metrics.repCount > 0) {
+          // Exercise has started - mark it and start tracking
+          this.exerciseStarted = true
+          this.exerciseStartTime = Date.now()
+          console.log('Exercise started - timer will begin counting')
+        }
+        
+        // Only show timer if exercise has started
+        if (this.exerciseStarted && metrics.workoutDuration !== undefined) {
+          // Calculate duration from when exercise actually started
+          // Use server's workoutDuration but only if exercise has started
+          const minutes = Math.floor(metrics.workoutDuration / 60)
+          const seconds = metrics.workoutDuration % 60
+          durationElement.textContent = `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+          // Store for workout stats
+          if (this.workoutStats) {
+            this.workoutStats.duration = metrics.workoutDuration
+          }
+        } else {
+          // Exercise hasn't started yet - show 00:00
+          durationElement.textContent = "00:00"
+          if (this.workoutStats) {
+            this.workoutStats.duration = 0
+          }
+        }
       }
     }
 
-    // Update calories (calculate if not provided)
-    const caloriesElement = document.getElementById("calories-burned")
-    if (caloriesElement) {
+    // Calculate and store calories for summary (not displayed in performance metrics)
+    if (this.workoutStats) {
       const calories = metrics.caloriesBurned || 
                       Math.round((metrics.workoutDuration || 0) * 0.1 + (metrics.repCount || 0) * 0.5)
-      caloriesElement.textContent = calories
-      // Store for workout stats
-      if (this.workoutStats) {
-        this.workoutStats.caloriesBurned = calories
-      }
+      this.workoutStats.caloriesBurned = calories
     }
 
     // Store heart rate for average calculation
@@ -684,43 +720,72 @@ class FitnessARApp {
   }
 
   updateFeedbackFromServer(feedbackData) {
-    console.log('Updating feedback from server:', feedbackData)
+    console.log('[UI Update] Updating feedback from server:', feedbackData)
     
     const feedbackStatus = document.getElementById("feedback-status")
     const suggestionsList = document.getElementById("suggestions-list")
     
-    if (!feedbackStatus || !suggestionsList) return
-
-    // Update status with appropriate class
-    const status = feedbackData.status || 'good'
-    feedbackStatus.className = `feedback-${status}`
-    
-    // Update status text
-    const statusText = status === 'good' ? 'Good Form' :
-                      status === 'warning' ? 'Needs Improvement' :
-                      status === 'error' ? 'Poor Form' : 'Unknown'
-    feedbackStatus.textContent = statusText
-
-    // Update suggestions list
-    suggestionsList.innerHTML = ''
-    const feedback = feedbackData.feedback || []
-    
-    if (feedback.length === 0) {
-      const li = document.createElement('li')
-      li.textContent = 'Keep up the good work!'
-      suggestionsList.appendChild(li)
-    } else {
-      feedback.forEach(suggestion => {
-        const li = document.createElement('li')
-        li.textContent = suggestion
-        suggestionsList.appendChild(li)
-      })
+    if (!feedbackStatus) {
+      console.error('[UI Update] Feedback status element not found!')
+      return
     }
+    if (!suggestionsList) {
+      console.error('[UI Update] Suggestions list element not found!')
+      return
+    }
+
+    // Handle feedback value: 0 = Good Form, 1 = Bad Form
+    // The server sends feedback as 0 or 1 in the payload (might be string or number)
+    let feedbackValue = feedbackData.feedback
+    
+    console.log('[UI Update] Feedback value received:', feedbackValue, 'Type:', typeof feedbackValue)
+    console.log('[UI Update] Full feedbackData:', JSON.stringify(feedbackData))
+    
+    // Convert to number if it's a string
+    if (typeof feedbackValue === 'string') {
+      feedbackValue = parseInt(feedbackValue, 10)
+      console.log('[UI Update] Converted string to number:', feedbackValue)
+    }
+    
+    // If feedback is a number (0 or 1), map it to status
+    let status
+    if (typeof feedbackValue === 'number' && !isNaN(feedbackValue)) {
+      // 0 = bad form, 1 = good form
+      status = feedbackValue === 0 ? 'error' : 'good'
+      console.log('[UI Update] Mapped feedback value', feedbackValue, 'to status:', status)
+    } else if (feedbackData.status) {
+      // Legacy support for status field
+      status = feedbackData.status
+      console.log('[UI Update] Using legacy status field:', status)
+    } else {
+      // Default to good
+      status = 'good'
+      console.log('[UI Update] No feedback value found, defaulting to good')
+    }
+    
+    // Update status with appropriate class
+    feedbackStatus.className = `feedback-${status}`
+    console.log('[UI Update] Set feedback class to:', `feedback-${status}`)
+    
+    // Update status text - only show "Good Form" or "Bad Form"
+    const statusText = status === 'good' ? 'Good Form' : 'Bad Form'
+    feedbackStatus.textContent = statusText
+    console.log('[UI Update] Set feedback text to:', statusText)
+
+    // Update suggestions list - show simple message based on form
+    suggestionsList.innerHTML = ''
+    const li = document.createElement('li')
+    if (status === 'good') {
+      li.textContent = 'Keep up the good work!'
+    } else {
+      li.textContent = 'Focus on your form!'
+    }
+    suggestionsList.appendChild(li)
 
     // Show confidence if available
     if (feedbackData.confidence !== undefined) {
       const confidencePercent = Math.round(feedbackData.confidence * 100)
-      console.log(`AI Confidence: ${confidencePercent}%`)
+      console.log(`[UI Update] AI Confidence: ${confidencePercent}%`)
     }
 }
 
@@ -779,9 +844,17 @@ dispose() {
 
       this.isWorkoutActive = true
       this.workoutStartTime = Date.now()
+      this.exerciseStartTime = null  // Will be set when exercise actually starts
+      this.exerciseStarted = false   // Reset exercise started flag
 
       // Reset workout stats
       this.resetWorkoutStats()
+      
+      // Reset timer display to 00:00
+      const durationElement = document.getElementById("workout-duration")
+      if (durationElement) {
+        durationElement.textContent = "00:00"
+      }
 
       // Start relay server connection
       if (this.dummyDataProvider) {
@@ -814,6 +887,14 @@ dispose() {
     console.log("Stopping workout...")
 
     this.isWorkoutActive = false
+    this.exerciseStarted = false
+    this.exerciseStartTime = null
+
+    // Reset timer display to 00:00
+    const durationElement = document.getElementById("workout-duration")
+    if (durationElement) {
+      durationElement.textContent = "00:00"
+    }
 
     // Stop relay server connection
     if (this.dummyDataProvider) {
@@ -960,32 +1041,48 @@ dispose() {
       heartRateElement.textContent = `${metrics.heartRate || 0} bpm`
     }
 
-    // Update pulse
-    const pulseElement = document.getElementById("pulse")
-    if (pulseElement) {
-      pulseElement.textContent = `${metrics.pulse || 0} bpm`
-    }
-
     // Update rep count
     const repCountElement = document.getElementById("rep-count")
     if (repCountElement) {
       repCountElement.textContent = metrics.repCount || 0
     }
 
-    // Update workout duration
+    // Update workout duration - only start timer when exercise actually starts
+    // For HR only mode, always keep timer at 00:00
     const durationElement = document.getElementById("workout-duration")
     if (durationElement) {
-      const minutes = Math.floor((metrics.workoutDuration || 0) / 60)
-      const seconds = (metrics.workoutDuration || 0) % 60
-      durationElement.textContent = `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+      // Check if in HR only mode
+      if (this.currentExercise === 'Hr Only') {
+        // HR only mode: always show 00:00
+        durationElement.textContent = "00:00"
+        this.workoutStats.duration = 0
+      } else {
+        // For other exercises, check if exercise has actually started
+        // Exercise starts when we get the first rep (repCount > 0)
+        if (!this.exerciseStarted && metrics.repCount > 0) {
+          // Exercise has started - mark it and start tracking
+          this.exerciseStarted = true
+          this.exerciseStartTime = Date.now()
+          console.log('Exercise started - timer will begin counting')
+        }
+        
+        // Only show timer if exercise has started
+        if (this.exerciseStarted && metrics.workoutDuration !== undefined) {
+          const minutes = Math.floor(metrics.workoutDuration / 60)
+          const seconds = metrics.workoutDuration % 60
+          durationElement.textContent = `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+          this.workoutStats.duration = metrics.workoutDuration
+        } else {
+          // Exercise hasn't started yet - show 00:00
+          durationElement.textContent = "00:00"
+          this.workoutStats.duration = 0
+        }
+      }
     }
 
-    // Update calories (simple calculation)
-    const caloriesElement = document.getElementById("calories-burned")
-    if (caloriesElement) {
-      const calories = Math.round((metrics.workoutDuration || 0) * 0.1 + (metrics.repCount || 0) * 0.5)
-      caloriesElement.textContent = calories
-    }
+    // Calculate and store calories for summary (not displayed in performance metrics)
+    const calories = Math.round((metrics.workoutDuration || 0) * 0.1 + (metrics.repCount || 0) * 0.5)
+    this.workoutStats.caloriesBurned = calories
 
     // Store heart rate for average calculation
     if (metrics.heartRate) {
@@ -1034,6 +1131,8 @@ dispose() {
       caloriesBurned: 0,
       heartRateReadings: [],
     }
+    this.exerciseStarted = false
+    this.exerciseStartTime = null
   }
 
   calculateFinalStats() {
@@ -1059,7 +1158,6 @@ dispose() {
     document.getElementById("summary-duration").textContent = `${minutes}:${seconds.toString().padStart(2, "0")}`
 
     document.getElementById("summary-reps").textContent = this.workoutStats.totalReps
-    document.getElementById("summary-heart-rate").textContent = `${this.workoutStats.avgHeartRate} bpm`
     document.getElementById("summary-calories").textContent = this.workoutStats.caloriesBurned
 
     modal.style.display = "flex"

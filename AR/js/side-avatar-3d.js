@@ -536,7 +536,7 @@ class SideAvatar3D {
       
       // Change avatar color based on exercise
       const exerciseColors = {
-        'push-ups': 0x00ff88,      // Green
+        'Hr Only': 0x00ff88,       // Green
         'bicep-curls': 0x4488ff,   // Blue
         'lateral-raises': 0xff8844, // Orange
         'squats': 0xff4488         // Pink

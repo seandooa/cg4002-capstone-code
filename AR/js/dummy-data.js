@@ -6,7 +6,7 @@ class DummyDataProvider {
     this.lastRepTime = 0
     this.heartRateBase = 70
     this.pulseBase = 70
-    this.exerciseType = "push-ups"
+    this.exerciseType = "Hr Only"
 
     // Callbacks for data updates (from relay server only)
     this.onMetricsUpdate = null
@@ -27,6 +27,14 @@ class DummyDataProvider {
     
     // Local metrics simulation
     this.metricsInterval = null
+    
+    // Connection monitoring
+    this.connectionMonitorInterval = null
+    this.lastMessageTime = null
+    this.messageCount = 0
+    
+    // Track message types received for debugging
+    this.messageTypesReceived = {}
   }
 
   setExerciseType(exerciseType) {
@@ -42,12 +50,19 @@ class DummyDataProvider {
     this.repCount = 0
     this.lastRepTime = 0
 
-    console.log(`Workout started - connecting to relay server for ${this.exerciseType}`)
+    console.log('='.repeat(50))
+    console.log('[Workout Start] Starting workout for:', this.exerciseType)
+    console.log('[Workout Start] Relay connection status:', this.isConnectedToRelay)
+    console.log('[Workout Start] Relay connection state:', this.relayConnection ? this.relayConnection.readyState : 'null')
+    console.log('[Workout Start] Relay URL:', this.relayNodeConfig.url)
+    console.log('='.repeat(50))
 
     // Connect to relay server if not already connected
     if (!this.isConnectedToRelay) {
+      console.log('[Workout Start] Not connected, attempting connection...')
       this.connectToRelayNode()
     } else {
+      console.log('[Workout Start] Already connected, sending workout start notification...')
       // Send workout start notification to existing connection
       this.sendToRelay({
         type: 'workout_started',
@@ -57,8 +72,13 @@ class DummyDataProvider {
       })
     }
 
-    // Start local metrics simulation as fallback
-    this.startLocalMetricsSimulation()
+    // Start local metrics simulation as fallback (only if not connected to server)
+    // If connected to server, server will provide all metrics
+    if (!this.isConnectedToRelay) {
+      this.startLocalMetricsSimulation()
+    } else {
+      console.log('[Workout Start] Server is connected - using server metrics only')
+    }
 
     if (this.onExerciseStateChange) {
       this.onExerciseStateChange("started")
@@ -95,8 +115,24 @@ class DummyDataProvider {
       clearInterval(this.metricsInterval)
     }
 
+    // Don't run local simulation if we're connected to the server
+    // Server will provide all metrics including rep count
+    if (this.isConnectedToRelay) {
+      console.log('[Local Metrics] Skipping local simulation - server is providing metrics')
+      return
+    }
+
+    console.log('[Local Metrics] Starting local metrics simulation (server not connected)')
+    
     this.metricsInterval = setInterval(() => {
       if (!this.isActive) return
+      
+      // If we became connected to server, stop local simulation
+      if (this.isConnectedToRelay) {
+        console.log('[Local Metrics] Server connected - stopping local simulation')
+        this.stopLocalMetricsSimulation()
+        return
+      }
 
       const now = Date.now()
       const workoutDuration = Math.floor((now - this.startTime) / 1000)
@@ -109,7 +145,7 @@ class DummyDataProvider {
         this.onMetricsUpdate(metrics)
       }
 
-      // Send to relay if connected
+      // Send to relay if connected (but we already checked it's not)
       if (this.isConnectedToRelay) {
         this.sendMetricsToRelay(metrics)
       }
@@ -134,20 +170,9 @@ class DummyDataProvider {
     const heartRate = Math.round(baseHeartRate + (intensityFactor * 30) + heartRateVariation)
     const pulse = Math.round(basePulse + (intensityFactor * 25) + heartRateVariation)
 
-    // Simulate rep counting based on exercise type and time
-    let repCount = this.repCount
-    if (workoutDuration > 0 && workoutDuration % 3 === 0) { // Every 3 seconds
-      const repProbability = this.getRepProbability()
-      if (Math.random() < repProbability) {
-        repCount++
-        this.repCount = repCount
-        
-        // Trigger rep detection callback
-        if (this.onRepDetected) {
-          this.onRepDetected(repCount)
-        }
-      }
-    }
+    // Rep count is provided by server only - no local simulation
+    // Use the rep count that was last updated by the server
+    const repCount = this.repCount
 
     // Calculate calories (simple formula)
     const calories = Math.round(workoutDuration * 0.1 + repCount * 0.5)
@@ -161,19 +186,6 @@ class DummyDataProvider {
     }
   }
 
-  getRepProbability() {
-    // Different rep probabilities based on exercise type
-    switch (this.exerciseType) {
-      case 'squats':
-        return 0.3 // 30% chance every 3 seconds
-      case 'bicep-curls':
-        return 0.4 // 40% chance every 3 seconds
-      case 'lateral-raises':
-        return 0.35 // 35% chance every 3 seconds
-      default:
-        return 0.25 // 25% chance every 3 seconds
-    }
-  }
 
   // Relay node communication methods
   generateDeviceId() {
@@ -207,9 +219,20 @@ class DummyDataProvider {
       this.relayConnection = new WebSocket(this.relayNodeConfig.url)
 
       this.relayConnection.onopen = () => {
-        console.log('Connected to relay node')
+        console.log('='.repeat(50))
+        console.log('[WebSocket] ✅ Connected to relay node')
+        console.log('[WebSocket] Connection state:', this.relayConnection.readyState, '(OPEN = 1)')
+        console.log('[WebSocket] URL:', this.relayNodeConfig.url)
+        console.log('[WebSocket] Device ID:', this.deviceId)
+        console.log('='.repeat(50))
         this.isConnectedToRelay = true
         this.reconnectAttempts = 0
+        
+        // Stop local metrics simulation - server will provide all metrics
+        if (this.metricsInterval) {
+          console.log('[WebSocket] Stopping local metrics simulation - server will provide metrics')
+          this.stopLocalMetricsSimulation()
+        }
         
         // Send device registration
         this.sendToRelay({
@@ -218,14 +241,34 @@ class DummyDataProvider {
           exerciseType: this.exerciseType,
           timestamp: Date.now()
         })
+        
+        // Start connection health monitoring
+        this.startConnectionMonitoring()
       }
 
       this.relayConnection.onmessage = (event) => {
         try {
+          this.messageCount++
+          this.lastMessageTime = Date.now()
+          
           const data = JSON.parse(event.data)
+          const messageType = data.type || 'unknown'
+          
+          // Log message type prominently for AI feedback
+          if (messageType === 'ai_feedback') {
+            console.log('[WebSocket] ✅ Message #' + this.messageCount + ' received at', new Date().toLocaleTimeString())
+            console.log('[WebSocket] 🎯 AI FEEDBACK MESSAGE DETECTED!')
+            console.log('[WebSocket] Raw message received:', event.data)
+            console.log('[WebSocket] Parsed data:', data)
+          } else {
+            console.log('[WebSocket] ✅ Message #' + this.messageCount + ' received at', new Date().toLocaleTimeString())
+            console.log('[WebSocket] Raw message received:', event.data)
+            console.log('[WebSocket] Parsed data:', data)
+          }
+          
           this.handleRelayMessage(data)
         } catch (error) {
-          console.error('Failed to parse relay message:', error)
+          console.error('❌ Failed to parse relay message:', error, 'Raw data:', event.data)
         }
       }
 
@@ -257,26 +300,62 @@ class DummyDataProvider {
   handleRelayMessage(data) {
     const messageType = data.type
 
+    // Track message types for debugging
+    if (!this.messageTypesReceived[messageType]) {
+      this.messageTypesReceived[messageType] = 0
+    }
+    this.messageTypesReceived[messageType]++
+    
+    // Log summary of message types every 20 messages
+    if (this.messageCount % 20 === 0 && this.messageCount > 0) {
+      console.log('[Message Stats] Types received:', this.messageTypesReceived)
+      if (!this.messageTypesReceived['ai_feedback']) {
+        console.log('⚠️  WARNING: No ai_feedback messages received yet!')
+      }
+    }
+
+    // Log all incoming messages for debugging
+    if (messageType === 'ai_feedback') {
+      console.log('[Relay Message] 🎯 AI FEEDBACK MESSAGE! Type:', messageType, 'Payload:', data.payload || data)
+    } else {
+      console.log('[Relay Message] Received message type:', messageType, 'Payload:', data.payload || data)
+    }
+
     switch (messageType) {
       case 'ai_feedback':
+        console.log('[Relay Message] 🎯 Routing to handleAIFeedback...')
         this.handleAIFeedback(data.payload)
         break
       case 'system_command':
         this.handleSystemCommand(data.payload)
         break
       case 'performance_metrics':
+        console.log('[Performance Metrics] Processing performance metrics message...')
         this.handlePerformanceMetrics(data.payload)
         break
       case 'biometric_data':
         this.handleBiometricData(data.payload)
         break
       default:
-        console.log('Unknown relay message type:', messageType)
+        console.log('⚠️  Unknown relay message type:', messageType)
+        console.log('⚠️  Full message data:', JSON.stringify(data, null, 2))
+        // Check if it might be AI feedback in a different format
+        if (data.feedback !== undefined || data.status !== undefined) {
+          console.log('⚠️  Message contains feedback/status - might be AI feedback in wrong format')
+          console.log('⚠️  Attempting to handle as AI feedback...')
+          this.handleAIFeedback(data.payload || data)
+        }
     }
   }
 
   handleAIFeedback(payload) {
-    console.log('Received AI feedback from server:', payload)
+    // Always log AI feedback with clear formatting (similar to performance metrics)
+    console.log('='.repeat(50))
+    console.log('[AI Feedback] RECEIVED FROM SERVER:')
+    console.log('  Feedback Value:', payload.feedback, '(0 = Bad Form, 1 = Good Form)')
+    console.log('  Timestamp:', new Date(payload.timestamp || Date.now()).toLocaleTimeString())
+    console.log('Full payload:', payload)
+    console.log('='.repeat(50))
     
     // Update feedback panel with server data
     if (window.app) {
@@ -290,14 +369,37 @@ class DummyDataProvider {
   }
 
   handlePerformanceMetrics(payload) {
-    console.log('Received performance metrics from server:', payload)
+    // Always log performance metrics with clear formatting
+    console.log('='.repeat(50))
+    console.log('[Performance Metrics] RECEIVED FROM SERVER:')
+    console.log('  Heart Rate:', payload.heartRate, 'bpm')
+    console.log('  Pulse:', payload.pulse, 'bpm')
+    console.log('  Rep Count:', payload.repCount, '(UPDATING FROM SERVER)')
+    console.log('  Workout Duration:', payload.workoutDuration, 'seconds')
+    console.log('  Calories Burned:', payload.caloriesBurned)
+    console.log('  Timestamp:', new Date(payload.timestamp || Date.now()).toLocaleTimeString())
+    console.log('Full payload:', payload)
+    console.log('='.repeat(50))
+    
+    // IMPORTANT: Rep count is ONLY updated from server - no local simulation
+    // Update local rep count from server data and trigger callback only when it increases
+    if (payload.repCount !== undefined && payload.repCount !== null) {
+      const previousRepCount = this.repCount
+      this.repCount = payload.repCount
+      
+      // Trigger rep detection callback ONLY when rep count increases from server
+      if (payload.repCount > previousRepCount && this.onRepDetected) {
+        console.log(`[Performance Metrics] Rep count increased from server: ${previousRepCount} → ${payload.repCount}`)
+        this.onRepDetected(payload.repCount)
+      }
+    }
     
     // Update metrics display with server data
     if (this.onMetricsUpdate) {
       this.onMetricsUpdate(payload)
     }
     
-    // Notify app to update metrics display
+    // Notify app to update metrics display (this will update the UI)
     if (window.app) {
       window.app.updateMetricsFromServer(payload)
     }
@@ -325,20 +427,17 @@ class DummyDataProvider {
   }
 
   handleSelectExerciseCommand(payload) {
-    const exerciseType = payload.exerciseType || payload.exercise_type
-    if (!exerciseType) {
-      console.error('No exercise type provided in select_exercise command')
-      return
+    let exerciseType = payload.exerciseType || payload.exercise_type
+    
+    // Validate exercise type - use "Hr Only" if empty or invalid
+    const validExercises = ['Hr Only', 'lateral-raises', 'squats', 'bicep-curls']
+    
+    if (!exerciseType || exerciseType.trim() === '' || !validExercises.includes(exerciseType)) {
+      console.warn(`Invalid or empty exercise type: "${exerciseType}". Defaulting to "Hr Only"`)
+      exerciseType = 'Hr Only'
     }
 
     console.log(`Server command: Select exercise - ${exerciseType}`)
-    
-    // Validate exercise type
-    const validExercises = ['bicep-curls', 'lateral-raises', 'squats', 'other']
-    if (!validExercises.includes(exerciseType)) {
-      console.warn(`Invalid exercise type: ${exerciseType}. Valid types: ${validExercises.join(', ')}`)
-      return
-    }
 
     // Update exercise type
     this.setExerciseType(exerciseType)
@@ -465,6 +564,9 @@ class DummyDataProvider {
     // Stop local metrics simulation
     this.stopLocalMetricsSimulation()
     
+    // Stop connection monitoring
+    this.stopConnectionMonitoring()
+    
     // Close connection
     if (this.relayConnection) {
       this.relayConnection.close()
@@ -474,6 +576,10 @@ class DummyDataProvider {
     
     // Reset reconnect attempts
     this.reconnectAttempts = 0
+    
+    // Reset message tracking
+    this.messageCount = 0
+    this.lastMessageTime = null
   }
 
   // Method to manually trigger rep detection (for testing)
@@ -501,6 +607,48 @@ class DummyDataProvider {
 
     // Send metrics to relay node
     this.sendMetricsToRelay(metrics)
+  }
+
+  // Start connection monitoring to track message reception
+  startConnectionMonitoring() {
+    if (this.connectionMonitorInterval) {
+      clearInterval(this.connectionMonitorInterval)
+    }
+    
+    this.connectionMonitorInterval = setInterval(() => {
+      const state = this.relayConnection ? this.relayConnection.readyState : -1
+      const states = {
+        0: 'CONNECTING',
+        1: 'OPEN',
+        2: 'CLOSING',
+        3: 'CLOSED',
+        '-1': 'NULL'
+      }
+      
+      const timeSinceLastMessage = this.lastMessageTime 
+        ? Math.floor((Date.now() - this.lastMessageTime) / 1000) 
+        : 'never'
+      
+      console.log('[Connection Monitor] State:', states[state], '| Messages received:', this.messageCount, '| Last message:', timeSinceLastMessage, 'seconds ago')
+      
+      // Warn if connection is closed but we think we're connected
+      if (state !== 1 && this.isConnectedToRelay) {
+        console.warn('[Connection Monitor] ⚠️  Connection state mismatch! State:', states[state], 'but isConnectedToRelay is true')
+      }
+      
+      // Warn if no messages received for a while
+      if (this.isActive && this.lastMessageTime && (Date.now() - this.lastMessageTime) > 15000) {
+        console.warn('[Connection Monitor] ⚠️  No messages received for', timeSinceLastMessage, 'seconds during active workout!')
+      }
+    }, 10000) // Check every 10 seconds
+  }
+
+  // Stop connection monitoring
+  stopConnectionMonitoring() {
+    if (this.connectionMonitorInterval) {
+      clearInterval(this.connectionMonitorInterval)
+      this.connectionMonitorInterval = null
+    }
   }
 }
 

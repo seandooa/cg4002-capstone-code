@@ -147,7 +147,6 @@ body {
   height: 100%;
   object-fit: cover;
   border-right: 1px solid #00ff88; /* Separator line */
-  transform: scaleX(-1); /* Mirror horizontally */
 }
 
 #side-avatar-canvas {
@@ -155,7 +154,6 @@ body {
   height: 100%;
   pointer-events: none;
   background: rgba(0, 0, 0, 0.5);
-  transform: scaleX(-1); /* Mirror horizontally */
 }
 
 #ready-player-me-canvas {
@@ -568,8 +566,8 @@ body {
 
 .modal-content h2 {
   color: #00ff88;
-  margin-bottom: 20px;
-  font-size: 18px;
+  margin-bottom: 15px;
+  font-size: 16px;
   text-transform: uppercase;
   letter-spacing: 1px;
 }
@@ -671,11 +669,12 @@ body {
 }
 
 #summary-modal .modal-content {
-  max-width: 500px;
+  max-width: 350px;
   background: rgba(0, 0, 0, 0.7) !important; /* Semi-transparent content */
   backdrop-filter: blur(15px);
   pointer-events: auto; /* Content is still clickable */
   position: relative;
+  padding: 20px;
 }
 
 /* Auto-close timer */
@@ -706,8 +705,8 @@ body {
 .summary-stat {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 15px;
-  padding: 10px;
+  margin-bottom: 10px;
+  padding: 8px;
   background: rgba(0, 255, 136, 0.1);
   border-radius: 5px;
 }

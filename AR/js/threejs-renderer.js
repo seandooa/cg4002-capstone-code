@@ -210,12 +210,18 @@ normalizeKeypoints(keypoints) {
       // Normalized Y: -((Pixel Y / Displayed Height) * 2 - 1) (Y is flipped in Three.js)
       const normalizedY = -((scaledY_px / displayedHeight) * 2 - 1)
       
-      // If front camera mirroring is used, flip X in normalized space:
-      // const finalX = -normalizedX;
+      // Check if mobile device (back camera - no flip needed)
+      // Desktop uses front camera which is flipped with CSS scaleX(-1)
+      const isMobile = document.body.classList.contains('mobile-device') || 
+                      (window.app && window.app.isMobile)
+      
+      // Only flip X on desktop (front camera with CSS flip)
+      // Mobile (back camera) doesn't need coordinate flip
+      const finalX = isMobile ? normalizedX : -normalizedX;
 
       return {
           ...keypoint,
-          x: normalizedX,
+          x: finalX,
           y: normalizedY,
           z: 0,
       }

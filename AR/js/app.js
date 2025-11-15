@@ -32,7 +32,8 @@ class FitnessARApp {
     // Animation and detection
     this.detectionLoop = null
     this.lastPoseTime = 0
-    this.detectionInterval = 100 // 10 FPS
+    // Use lower FPS on mobile to prevent performance issues
+    this.detectionInterval = this.isMobile ? 200 : 100 // 5 FPS on mobile, 10 FPS on desktop
 
     // Mobile and fullscreen handling
     this.isMobile = this.detectMobile()
@@ -316,47 +317,90 @@ class FitnessARApp {
   async configureRelayNode() {
     if (!this.dummyDataProvider) return
 
-    // For mobile devices, use the current page's hostname (which is the server's IP)
-    // For localhost access, try to detect the actual server IP
-    let detectedIP = window.location.hostname
-    
-    // Only try auto-detection if we're on localhost (laptop access)
-    if (detectedIP === 'localhost' || detectedIP === '127.0.0.1') {
-      const localIP = await this.getLocalIP()
-      detectedIP = localIP || detectedIP
-    }
-    
-    // If still no IP or got localhost, warn user
-    if (!detectedIP || detectedIP === 'localhost' || detectedIP === '127.0.0.1') {
-      console.warn('⚠️  Could not detect IP address automatically')
-      detectedIP = window.location.hostname || 'localhost'
-    }
-    
-    // Warn if we detected a virtual adapter IP (only for localhost detection)
-    if (detectedIP.startsWith('172.') && window.location.hostname === 'localhost') {
-      console.warn('⚠️  Detected Hyper-V/WSL virtual adapter IP:', detectedIP)
-      console.warn('⚠️  If connection fails, check your WiFi IP (ipconfig) and set manually in Relay Settings')
-    }
-    
-    // Determine protocol based on current page protocol
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const relayUrl = `${protocol}://${detectedIP}:8080`
+    // Check if there's a saved relay URL in localStorage first
+    const savedRelayUrl = localStorage.getItem('relayNodeUrl')
+    let relayUrl = savedRelayUrl
 
-    console.log('=' .repeat(70))
-    console.log('🔧 AR FITNESS APP - RELAY CONFIGURATION')
-    console.log('=' .repeat(70))
-    console.log(`📡 Detected IP Address: ${detectedIP}`)
-    console.log(`🔗 Relay URL: ${relayUrl}`)
-    console.log(`🔒 Protocol: ${protocol === 'wss' ? 'Secure (WSS)' : 'Non-Secure (WS)'}`)
-    
-    // Show warning if might be wrong
-    if (detectedIP.startsWith('172.') || detectedIP.startsWith('169.254.')) {
-      console.log(`⚠️  Warning: This might be a virtual adapter IP!`)
-      console.log(`💡 Expected WiFi IP format: 192.168.x.x`)
-      console.log(`💡 If connection fails, manually set in Relay Settings`)
+    if (!relayUrl || relayUrl.trim() === '') {
+      // No saved URL, so auto-detect
+      console.log('📡 No saved relay URL found, auto-detecting...')
+      
+      // For mobile devices, use the current page's hostname (which is the server's IP)
+      // For localhost access, try to detect the actual server IP
+      let detectedIP = window.location.hostname
+      
+      // Only try auto-detection if we're on localhost (laptop access)
+      if (detectedIP === 'localhost' || detectedIP === '127.0.0.1') {
+        const localIP = await this.getLocalIP()
+        detectedIP = localIP || detectedIP
+      }
+      
+      // If still no IP or got localhost, warn user
+      if (!detectedIP || detectedIP === 'localhost' || detectedIP === '127.0.0.1') {
+        console.warn('⚠️  Could not detect IP address automatically')
+        detectedIP = window.location.hostname || 'localhost'
+      }
+      
+      // Warn if we detected a virtual adapter IP (only for localhost detection)
+      if (detectedIP.startsWith('172.') && window.location.hostname === 'localhost') {
+        console.warn('⚠️  Detected Hyper-V/WSL virtual adapter IP:', detectedIP)
+        console.warn('⚠️  If connection fails, check your WiFi IP (ipconfig) and set manually in Relay Settings')
+      }
+      
+      // Determine protocol based on current page protocol
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+      relayUrl = `${protocol}://${detectedIP}:8080`
+
+      console.log('=' .repeat(70))
+      console.log('🔧 AR FITNESS APP - RELAY CONFIGURATION (Auto-Detected)')
+      console.log('=' .repeat(70))
+      console.log(`📡 Detected IP Address: ${detectedIP}`)
+      console.log(`🔗 Relay URL: ${relayUrl}`)
+      console.log(`🔒 Protocol: ${protocol === 'wss' ? 'Secure (WSS)' : 'Non-Secure (WS)'}`)
+      
+      // Show warning if might be wrong
+      if (detectedIP.startsWith('172.') || detectedIP.startsWith('169.254.')) {
+        console.log(`⚠️  Warning: This might be a virtual adapter IP!`)
+        console.log(`💡 Expected WiFi IP format: 192.168.x.x or 10.179.x.x`)
+        console.log(`💡 If connection fails, manually set in Relay Settings`)
+      }
+      
+      console.log('💡 TIP: If the server is on a different machine, configure it manually in Relay Settings')
+      console.log('')
+      console.log('📋 TO CONFIGURE MANUALLY:')
+      console.log('   1. Click the "Relay Settings" button in the UI')
+      console.log('   2. Enter the server URL (e.g., ws://10.179.214.103:8080 or wss://10.179.214.103:8080)')
+      console.log('   3. Click "Save Configuration"')
+      console.log('   4. The URL will be saved and used on future loads')
+      console.log('')
+      console.log('⚠️  NOTE: Make sure the protocol matches the server:')
+      console.log('   - If server uses SSL: wss://IP:8080')
+      console.log('   - If server uses no SSL: ws://IP:8080')
+      console.log('=' .repeat(70))
+    } else {
+      // Use saved URL, but update protocol if needed
+      console.log('=' .repeat(70))
+      console.log('🔧 AR FITNESS APP - RELAY CONFIGURATION (Using Saved URL)')
+      console.log('=' .repeat(70))
+      console.log(`🔗 Using saved Relay URL: ${relayUrl}`)
+      
+      // Update protocol to match current page if URL doesn't have explicit protocol
+      try {
+        const urlObj = new URL(relayUrl)
+        const currentProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+        if ((urlObj.protocol === 'ws:' && currentProtocol === 'wss') || 
+            (urlObj.protocol === 'wss:' && currentProtocol === 'ws')) {
+          // Protocol mismatch - keep saved protocol but warn
+          console.log(`🔒 Protocol: ${urlObj.protocol === 'wss:' ? 'Secure (WSS)' : 'Non-Secure (WS)'}`)
+        } else {
+          console.log(`🔒 Protocol: ${urlObj.protocol === 'wss:' ? 'Secure (WSS)' : 'Non-Secure (WS)'}`)
+        }
+      } catch (e) {
+        console.warn('⚠️  Invalid saved URL format, will attempt to use it anyway')
+      }
+      
+      console.log('=' .repeat(70))
     }
-    
-    console.log('=' .repeat(70))
 
     // Force reset configuration to ensure correct IP address
     if (window.RelayNodeConfig) {
@@ -368,15 +412,17 @@ class FitnessARApp {
     const relayConfig = {
       enabled: true, // Always enabled
       url: relayUrl,
-      reconnectInterval: 5000,
-      maxReconnectAttempts: 10
+      reconnectInterval: parseInt(localStorage.getItem('relayNodeReconnectInterval')) || 5000,
+      maxReconnectAttempts: parseInt(localStorage.getItem('relayNodeMaxReconnectAttempts')) || 10
     }
 
-    // Save the configuration
+    // Save the configuration (only if we auto-detected, preserve saved values otherwise)
+    if (!savedRelayUrl || savedRelayUrl.trim() === '') {
+      localStorage.setItem('relayNodeUrl', relayUrl)
+    }
     localStorage.setItem('relayNodeEnabled', 'true')
-    localStorage.setItem('relayNodeUrl', relayUrl)
-    localStorage.setItem('relayNodeReconnectInterval', '5000')
-    localStorage.setItem('relayNodeMaxReconnectAttempts', '10')
+    localStorage.setItem('relayNodeReconnectInterval', relayConfig.reconnectInterval.toString())
+    localStorage.setItem('relayNodeMaxReconnectAttempts', relayConfig.maxReconnectAttempts.toString())
 
     this.dummyDataProvider.configureRelayNode(relayConfig)
 
@@ -384,6 +430,12 @@ class FitnessARApp {
     const relayUrlDisplay = document.getElementById('relay-url-display')
     if (relayUrlDisplay) {
       relayUrlDisplay.textContent = relayUrl
+    }
+    
+    // Update the input field in the modal if it exists
+    const relayUrlInput = document.getElementById('relay-url')
+    if (relayUrlInput) {
+      relayUrlInput.value = relayUrl
     }
 
     // Always attempt to connect
@@ -734,62 +786,40 @@ class FitnessARApp {
       return
     }
 
-    // Handle feedback value: 0 = Good Form, 1 = Bad Form
-    // The server sends feedback as 0 or 1 in the payload (might be string or number)
-    let feedbackValue = feedbackData.feedback
+    // Handle string feedback from server
+    const feedbackMsg = feedbackData.feedback
     
-    console.log('[UI Update] Feedback value received:', feedbackValue, 'Type:', typeof feedbackValue)
-    console.log('[UI Update] Full feedbackData:', JSON.stringify(feedbackData))
-    
-    // Convert to number if it's a string
-    if (typeof feedbackValue === 'string') {
-      feedbackValue = parseInt(feedbackValue, 10)
-      console.log('[UI Update] Converted string to number:', feedbackValue)
+    if (feedbackMsg === "Error") {
+      // Don't update if valid_check=0 (Error)
+      console.log('[UI Update] Received Error - keeping previous feedback')
+      return
     }
-    
-    // If feedback is a number (0 or 1), map it to status
-    let status
-    if (typeof feedbackValue === 'number' && !isNaN(feedbackValue)) {
-      // 0 = bad form, 1 = good form
-      status = feedbackValue === 0 ? 'error' : 'good'
-      console.log('[UI Update] Mapped feedback value', feedbackValue, 'to status:', status)
-    } else if (feedbackData.status) {
-      // Legacy support for status field
-      status = feedbackData.status
-      console.log('[UI Update] Using legacy status field:', status)
+
+    let status, statusText
+    if (feedbackMsg === "Good Form") {
+      status = "good"
+      statusText = "Good"
+    } else if (feedbackMsg === "Bad Form") {
+      status = "error"
+      statusText = "Bad"
     } else {
-      // Default to good
-      status = 'good'
-      console.log('[UI Update] No feedback value found, defaulting to good')
+      // Unknown feedback - skip update
+      console.warn('[UI Update] Unknown feedback message:', feedbackMsg)
+      return
     }
     
-    // Update status with appropriate class
+    // Update status with appropriate class and text
     feedbackStatus.className = `feedback-${status}`
     console.log('[UI Update] Set feedback class to:', `feedback-${status}`)
     
-    // Update status text - only show "Good Form" or "Bad Form"
-    const statusText = status === 'good' ? 'Good Form' : 'Bad Form'
     feedbackStatus.textContent = statusText
     console.log('[UI Update] Set feedback text to:', statusText)
 
-    // Update suggestions list - show simple message based on form
+    // Clear suggestions (as per simplified feedback)
     suggestionsList.innerHTML = ''
-    const li = document.createElement('li')
-    if (status === 'good') {
-      li.textContent = 'Keep up the good work!'
-    } else {
-      li.textContent = 'Focus on your form!'
-    }
-    suggestionsList.appendChild(li)
+  }
 
-    // Show confidence if available
-    if (feedbackData.confidence !== undefined) {
-      const confidencePercent = Math.round(feedbackData.confidence * 100)
-      console.log(`[UI Update] AI Confidence: ${confidencePercent}%`)
-    }
-}
-
-// Update your waitForClasses method to include SideAvatar3D:
+  // Update your waitForClasses method to include SideAvatar3D:
 async waitForClasses() {
   const maxWaitTime = 5000 // 5 seconds
   const startTime = Date.now()
@@ -934,26 +964,46 @@ dispose() {
 
       const currentTime = Date.now()
       if (currentTime - this.lastPoseTime < this.detectionInterval) {
-        this.detectionLoop = requestAnimationFrame(detectPoses)
+        // Use setTimeout on mobile, requestAnimationFrame on desktop
+        if (this.isMobile) {
+          this.detectionLoop = setTimeout(detectPoses, this.detectionInterval - (currentTime - this.lastPoseTime))
+        } else {
+          this.detectionLoop = requestAnimationFrame(detectPoses)
+        }
         return
       }
 
       try {
-        // Detect poses
-        const poses = await this.poseDetector.detectPoses(this.videoElement)
+        // Detect poses with timeout protection for mobile
+        const detectionTimeout = this.isMobile ? 500 : 1000 // Shorter timeout on mobile
+        const posesPromise = this.poseDetector.detectPoses(this.videoElement)
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Pose detection timeout')), detectionTimeout)
+        )
+        
+        const poses = await Promise.race([posesPromise, timeoutPromise])
 
         if (poses && poses.length > 0) {
-          // Get posture analysis
-          const analysis = this.poseDetector.getPostureAnalysis(poses)
+          // Get posture analysis (skip if it takes too long on mobile)
+          let analysis = null
+          try {
+            analysis = this.poseDetector.getPostureAnalysis(poses)
+          } catch (analysisError) {
+            console.warn("Posture analysis failed, continuing without it:", analysisError)
+            // Continue without analysis - skeleton will still render
+          }
+
+          // Get highlighted joints (only if analysis succeeded)
+          const highlightedJoints = analysis ? this.poseDetector.getHighlightedJoints(analysis) : []
 
           // Update AR overlays - use only AR renderer for mobile, ThreeJS for desktop
           if (this.isMobile) {
             // Mobile: Use only AR renderer (2D canvas)
             if (this.arRenderer) {
               this.arRenderer.showSkeleton = true
-              // Force canvas resize before drawing to ensure proper scaling
-              this.arRenderer.forceResize()
-              this.arRenderer.drawPoses(poses, this.poseDetector.getHighlightedJoints(analysis))
+              // Only resize if needed (not every frame to improve performance)
+              // Skip forceResize on mobile - it's expensive and usually not needed
+              this.arRenderer.drawPoses(poses, highlightedJoints)
             }
             // Disable ThreeJS renderer on mobile
             if (this.threejsRenderer) {
@@ -963,7 +1013,7 @@ dispose() {
             // Desktop: Use ThreeJS renderer
             if (this.threejsRenderer) {
               this.threejsRenderer.setVisibility(true)
-              this.threejsRenderer.drawPoses(poses, this.poseDetector.getHighlightedJoints(analysis))
+              this.threejsRenderer.drawPoses(poses, highlightedJoints)
             }
             // Disable AR renderer on desktop
             if (this.arRenderer) {
@@ -972,8 +1022,8 @@ dispose() {
             }
           }
 
-          // Update feedback
-          if (this.arRenderer) {
+          // Update feedback (only if analysis succeeded)
+          if (analysis && this.arRenderer) {
             this.arRenderer.updateFeedbackVisuals(analysis)
           }
 
@@ -990,10 +1040,20 @@ dispose() {
 
         this.lastPoseTime = currentTime
       } catch (error) {
-        console.error("Error in pose detection:", error)
+        // On mobile, log but don't spam console with errors
+        if (!this.isMobile || error.message !== 'Pose detection timeout') {
+          console.error("Error in pose detection:", error)
+        }
+        // Continue the loop even on error to prevent freezing
       }
 
-      this.detectionLoop = requestAnimationFrame(detectPoses)
+      // Use setTimeout on mobile instead of requestAnimationFrame for better performance
+      // This prevents the animation frame queue from backing up on slower devices
+      if (this.isMobile) {
+        this.detectionLoop = setTimeout(detectPoses, this.detectionInterval)
+      } else {
+        this.detectionLoop = requestAnimationFrame(detectPoses)
+      }
     }
 
     detectPoses()
@@ -1001,7 +1061,14 @@ dispose() {
 
   stopPoseDetection() {
     if (this.detectionLoop) {
-      cancelAnimationFrame(this.detectionLoop)
+      // Cancel animation frame (desktop) or timeout (mobile)
+      if (typeof this.detectionLoop === 'number') {
+        if (this.isMobile) {
+          clearTimeout(this.detectionLoop)
+        } else {
+          cancelAnimationFrame(this.detectionLoop)
+        }
+      }
       this.detectionLoop = null
     }
 

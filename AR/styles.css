@@ -99,22 +99,13 @@ body {
   object-position: center;  /* keeps subject centered */
   background-color: #000;
   z-index: 1;
-  /* Removed transform: scale(1.1) to fix skeleton alignment */
-  /* transform: scale(1.1); */
-  /* transform-origin: center; */
+  transform: scaleX(-1) scale(1.1); /* Flip horizontally (front camera) and scale up to eliminate gaps */
+  transform-origin: center;
 }
 
-
-
-/* Added Three.js overlay for 3D skeletal rendering */
-#threejs-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 15;
+/* Mobile uses back camera - no flip needed */
+.mobile-device #camera-feed {
+  transform: scale(1.1) !important; /* Scale up only, no horizontal flip for back camera */
 }
 
 #ar-overlay {
@@ -125,6 +116,24 @@ body {
   height: 100vh;
   pointer-events: none;
   z-index: 10;
+  transform: scaleX(-1) scale(1.1); /* Flip horizontally to match front camera and scale up */
+  transform-origin: center;
+}
+
+/* Mobile uses back camera - no flip needed */
+.mobile-device #ar-overlay {
+  transform: scale(1.1) !important; /* Scale up only, no horizontal flip for back camera */
+}
+
+/* Added Three.js overlay for 3D skeletal rendering */
+#threejs-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 15;
 }
 
 /* Added side camera container */
@@ -147,6 +156,8 @@ body {
   height: 100%;
   object-fit: cover;
   border-right: 1px solid #00ff88; /* Separator line */
+  transform: scaleX(-1); /* Flip horizontally to correct orientation */
+  transform-origin: center;
 }
 
 #side-avatar-canvas {
@@ -154,6 +165,8 @@ body {
   height: 100%;
   pointer-events: none;
   background: rgba(0, 0, 0, 0.5);
+  transform: scaleX(-1); /* Flip horizontally to match side camera feed */
+  transform-origin: center;
 }
 
 #ready-player-me-canvas {
@@ -666,6 +679,7 @@ body {
   background: rgba(0, 0, 0, 0.3) !important; /* Transparent background */
   backdrop-filter: blur(3px);
   pointer-events: none; /* Allow clicking through the background */
+  z-index: 1000;
 }
 
 #summary-modal .modal-content {
@@ -767,7 +781,7 @@ body {
   height: 100vh !important;
   object-fit: cover !important;
   object-position: center !important;
-  transform: scale(1.1) !important; /* Scale up to eliminate gaps */
+  transform: scale(1.1) !important; /* Scale up only, no horizontal flip for back camera */
   transform-origin: center !important;
   position: fixed !important;
   top: 0 !important;
@@ -939,7 +953,7 @@ body {
     height: 100vh !important;
     object-fit: cover !important;
     object-position: center !important;
-    transform: scale(1.1) !important; /* Scale up to eliminate gaps */
+    transform: scale(1.1) !important; /* Scale up only, no horizontal flip for back camera */
     transform-origin: center !important;
     position: fixed !important;
     top: 0 !important;
@@ -953,24 +967,7 @@ body {
   }
 }
 
-/* Force full screen for any aspect ratio */
-#camera-feed {
-  /* Override any browser default video sizing */
-  width: 100vw !important;
-  height: 100vh !important;
-  min-width: 100vw !important;
-  min-height: 100vh !important;
-  max-width: none !important;
-  max-height: none !important;
-  object-fit: cover !important;
-  object-position: center !important;
-  transform: scale(1.1) !important;
-  transform-origin: center !important;
-  position: fixed !important;
-  top: 0 !important;
-  left: 0 !important;
-  z-index: 1 !important;
-}
+/* Force full screen for any aspect ratio - transform already set in main #camera-feed rule above */
 
 .mobile-device .mobile-only {
   display: inline-block;

@@ -357,12 +357,44 @@ class DummyDataProvider {
     console.log('Full payload:', payload)
     console.log('='.repeat(50))
     
-    // Update feedback panel with server data
-    if (window.app) {
-      window.app.updateFeedbackFromServer(payload)
+    // Directly update feedback UI
+    const feedbackStatus = document.getElementById("feedback-status")
+    const suggestionsList = document.getElementById("suggestions-list")
+    
+    if (!feedbackStatus) {
+      console.error('[AI Feedback] Feedback status element not found!')
+      return
     }
     
-    // Update AR renderer with feedback
+    if (payload.feedback === "Error") {
+      // Don't update if valid_check=0 (Error)
+      console.log('[AI Feedback] Received Error - keeping previous feedback')
+      return
+    }
+    
+    let statusClass, statusText
+    if (payload.feedback === "Good Form") {
+      statusClass = "feedback-good"
+      statusText = "Good Form"
+    } else if (payload.feedback === "Bad Form") {
+      statusClass = "feedback-error"
+      statusText = "Bad Form"
+    } else {
+      // Unknown feedback - skip update
+      console.warn('[AI Feedback] Unknown feedback message:', payload.feedback)
+      return
+    }
+    
+    // Update status
+    feedbackStatus.className = statusClass
+    feedbackStatus.textContent = statusText
+    
+    // Clear suggestions
+    if (suggestionsList) {
+      suggestionsList.innerHTML = ''
+    }
+    
+    // Update AR renderer with feedback (for highlighted joints if needed)
     if (window.arRenderer) {
       window.arRenderer.updateFeedbackVisuals(payload)
     }

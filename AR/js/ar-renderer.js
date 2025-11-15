@@ -26,6 +26,21 @@ class ARRenderer {
     // Animation properties
     this.animationFrame = null
     this.pulsePhase = 0
+    
+    // Cache mobile detection to avoid repeated DOM checks (performance optimization)
+    this._isMobileCached = null
+    this._mobileCheckTime = 0
+  }
+  
+  _isMobile() {
+    // Cache the result for 1 second to avoid repeated DOM checks
+    const now = Date.now()
+    if (this._isMobileCached === null || (now - this._mobileCheckTime) > 1000) {
+      this._isMobileCached = document.body.classList.contains('mobile-device') || 
+                             (window.app && window.app.isMobile)
+      this._mobileCheckTime = now
+    }
+    return this._isMobileCached
   }
 
   resizeCanvas() {
@@ -211,9 +226,13 @@ scaleKeypoints(keypoints) {
       let scaledX = keypoint.x * scale + offsetX
       const scaledY = keypoint.y * scale + offsetY
       
-      // If front camera mirroring is used (via CSS transform: scaleX(-1)), apply flip here:
-      // scaledX = canvasWidth - scaledX; 
-
+      // Use cached mobile detection for performance
+      const isMobile = this._isMobile()
+      
+      // Only flip coordinates on desktop (front camera with CSS flip)
+      // Mobile (back camera) doesn't need coordinate flip since CSS doesn't flip it
+      // No action needed - CSS handles the flip on desktop
+      
       return {
           ...keypoint,
           x: scaledX,
@@ -416,23 +435,6 @@ scaleKeypoints(keypoints) {
   }
 
   updateFeedbackVisuals(analysis) {
-    // Update HUD elements based on analysis
-    const feedbackStatus = document.getElementById("feedback-status")
-    const suggestionsList = document.getElementById("suggestions-list")
-
-    // Update status
-    feedbackStatus.className = `feedback-${analysis.status}`
-    feedbackStatus.textContent =
-      analysis.status === "good" ? "Good Form" : analysis.status === "warning" ? "Needs Adjustment" : "Poor Form"
-
-    // Update suggestions
-    suggestionsList.innerHTML = ""
-    analysis.feedback.forEach((suggestion) => {
-      const li = document.createElement("li")
-      li.textContent = suggestion
-      suggestionsList.appendChild(li)
-    })
-
     // Store highlighted joints for rendering
     this.highlightedJoints = window.poseDetector.getHighlightedJoints(analysis)
   }

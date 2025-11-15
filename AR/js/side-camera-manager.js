@@ -34,7 +34,12 @@ class SideCameraManager {
     this.sideVideoElement = null
     this.detectionLoop = null
     this.lastPoseTime = 0
-    this.detectionInterval = 100 // 10 FPS for performance
+    // Use lower FPS on mobile to prevent performance issues
+    this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                    (window.innerWidth <= 768 && window.innerHeight <= 1024) ||
+                    ('ontouchstart' in window) ||
+                    (navigator.maxTouchPoints > 0)
+    this.detectionInterval = this.isMobile ? 200 : 100 // 5 FPS on mobile, 10 FPS on desktop
     
     // Exercise tracking
     this.currentExerciseType = null
@@ -321,7 +326,7 @@ class SideCameraManager {
       return
     }
 
-    console.log("Starting BlazePose detection for side camera...")
+    console.log(`Starting BlazePose detection for side camera... (${this.isMobile ? 'Mobile' : 'Desktop'} mode)`)
 
     // Start the detection loop with MediaPipe BlazePose
     const detectPoses = async () => {
@@ -329,23 +334,43 @@ class SideCameraManager {
 
       const currentTime = Date.now()
       if (currentTime - this.lastPoseTime < this.detectionInterval) {
-        this.detectionLoop = requestAnimationFrame(detectPoses)
+        // Use setTimeout on mobile, requestAnimationFrame on desktop
+        if (this.isMobile) {
+          this.detectionLoop = setTimeout(detectPoses, this.detectionInterval - (currentTime - this.lastPoseTime))
+        } else {
+          this.detectionLoop = requestAnimationFrame(detectPoses)
+        }
         return
       }
 
       try {
         // Check if video is ready
         if (this.sideVideoElement.readyState >= 2) {
-          // Send video frame to BlazePose
-          await this.sidePoseDetector.send({ image: this.sideVideoElement })
+          // Add timeout protection for mobile
+          const detectionTimeout = this.isMobile ? 500 : 1000
+          const detectionPromise = this.sidePoseDetector.send({ image: this.sideVideoElement })
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Side pose detection timeout')), detectionTimeout)
+          )
+          
+          await Promise.race([detectionPromise, timeoutPromise])
         }
 
         this.lastPoseTime = currentTime
       } catch (error) {
-        console.error("Error in side camera pose detection:", error)
+        // On mobile, don't spam console with timeout errors
+        if (!this.isMobile || error.message !== 'Side pose detection timeout') {
+          console.error("Error in side camera pose detection:", error)
+        }
+        // Continue the loop even on error to prevent freezing
       }
 
-      this.detectionLoop = requestAnimationFrame(detectPoses)
+      // Use setTimeout on mobile, requestAnimationFrame on desktop
+      if (this.isMobile) {
+        this.detectionLoop = setTimeout(detectPoses, this.detectionInterval)
+      } else {
+        this.detectionLoop = requestAnimationFrame(detectPoses)
+      }
     }
 
     detectPoses()
@@ -607,20 +632,27 @@ class SideCameraManager {
   drawSimpleAvatar(poseData) {
     if (!this.showAvatar) return;
     
-    const canvas = document.getElementById('side-avatar-canvas');
-    if (!canvas) {
-      console.error("Side avatar canvas not found!");
-      return;
-    }
-    
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      console.error("Could not get canvas context!");
-      return;
-    }
-    
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    try {
+      const canvas = document.getElementById('side-avatar-canvas');
+      if (!canvas) {
+        console.error("Side avatar canvas not found!");
+        return;
+      }
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        console.error("Could not get canvas context!");
+        return;
+      }
+      
+      // Validate canvas dimensions
+      if (canvas.width === 0 || canvas.height === 0) {
+        console.warn("Canvas has zero dimensions, skipping draw");
+        return;
+      }
+      
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     // Set canvas background with gradient
     const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
@@ -630,7 +662,10 @@ class SideCameraManager {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
     const keypoints = poseData.keypoints || [];
-    console.log("Drawing enhanced 3D avatar with", keypoints.length, "keypoints");
+    // Only log on desktop to reduce console spam on mobile
+    if (!this.isMobile) {
+      console.log("Drawing enhanced 3D avatar with", keypoints.length, "keypoints");
+    }
     
     // Check if we have 3D data
     const is3D = poseData.is3D || false;
@@ -694,15 +729,23 @@ class SideCameraManager {
       ctx.fill();
     });
     
-    // Draw head details if head keypoint exists
-    this.drawHeadDetails(ctx, keypoints, canvas.width, canvas.height, is3D);
-    
-    console.log("Enhanced 3D humanoid avatar drawn successfully");
+      // Draw head details if head keypoint exists
+      this.drawHeadDetails(ctx, keypoints, canvas.width, canvas.height, is3D);
+      
+      // Only log on desktop to reduce console spam on mobile
+      if (!this.isMobile) {
+        console.log("Enhanced 3D humanoid avatar drawn successfully");
+      }
+    } catch (error) {
+      console.error("Error drawing avatar:", error);
+      // Don't throw - allow the detection loop to continue
+    }
   }
   
   drawEnhancedSkeletonConnections(ctx, keypoints, canvasWidth, canvasHeight, is3D) {
-    // Enhanced connections with depth-aware rendering
-    const connections = [
+    try {
+      // Enhanced connections with depth-aware rendering
+      const connections = [
       // Head to neck
       { from: 'head', to: 'shoulder', width: 6, color: '#00ffaa' },
       
@@ -792,9 +835,14 @@ class SideCameraManager {
         }
       }
     });
+    } catch (error) {
+      console.error("Error drawing skeleton connections:", error);
+      // Don't throw - allow avatar to continue rendering
+    }
   }
 
   drawBodyShapes(ctx, keypoints, canvasWidth, canvasHeight, is3D) {
+    try {
     // Draw body shapes for more realistic appearance
     
     // Get key points
@@ -873,9 +921,14 @@ class SideCameraManager {
         ctx.stroke();
       }
     }
+    } catch (error) {
+      console.error("Error drawing body shapes:", error);
+      // Don't throw - allow avatar to continue rendering
+    }
   }
 
   drawHeadDetails(ctx, keypoints, canvasWidth, canvasHeight, is3D) {
+    try {
     // Draw facial features if available
     const head = keypoints.find(kp => kp.name === 'head');
     const leftEye = keypoints.find(kp => kp.name === 'leftEye');
@@ -922,6 +975,10 @@ class SideCameraManager {
         }
       }
     });
+    } catch (error) {
+      console.error("Error drawing head details:", error);
+      // Don't throw - allow avatar to continue rendering
+    }
   }
 
   drawSkeletonConnections(ctx, keypoints, canvasWidth, canvasHeight) {
@@ -1102,7 +1159,12 @@ class SideCameraManager {
 
   stopSidePoseDetection() {
     if (this.detectionLoop) {
-      cancelAnimationFrame(this.detectionLoop)
+      // Cancel animation frame (desktop) or timeout (mobile)
+      if (this.isMobile) {
+        clearTimeout(this.detectionLoop)
+      } else {
+        cancelAnimationFrame(this.detectionLoop)
+      }
       this.detectionLoop = null
     }
     console.log("Side camera pose detection stopped")

@@ -19,7 +19,12 @@ class IntegratedAvatarSystem {
         this.animationId = null;
         this.isRunning = false;
         this.lastDetectionTime = 0;
-        this.detectionInterval = 100; // 10 FPS for pose detection
+        // Use lower FPS on mobile to prevent performance issues
+        this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                        (window.innerWidth <= 768 && window.innerHeight <= 1024) ||
+                        ('ontouchstart' in window) ||
+                        (navigator.maxTouchPoints > 0)
+        this.detectionInterval = this.isMobile ? 200 : 100; // 5 FPS on mobile, 10 FPS on desktop
         
         // Settings
         this.showDebugInfo = false;
@@ -101,7 +106,12 @@ class IntegratedAvatarSystem {
         this.isRunning = false;
         
         if (this.animationId) {
-            cancelAnimationFrame(this.animationId);
+            // Cancel animation frame (desktop) or timeout (mobile)
+            if (this.isMobile) {
+                clearTimeout(this.animationId);
+            } else {
+                cancelAnimationFrame(this.animationId);
+            }
             this.animationId = null;
         }
     }
@@ -114,19 +124,42 @@ class IntegratedAvatarSystem {
             if (timestamp - this.lastDetectionTime >= this.detectionInterval) {
                 try {
                     if (this.videoElement && this.videoElement.readyState >= 2) {
-                        await this.poseDetector.detectPose(this.videoElement);
+                        // Add timeout protection for mobile
+                        const detectionTimeout = this.isMobile ? 500 : 1000
+                        const detectionPromise = this.poseDetector.detectPose(this.videoElement)
+                        const timeoutPromise = new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Avatar pose detection timeout')), detectionTimeout)
+                        )
+                        
+                        await Promise.race([detectionPromise, timeoutPromise])
                     }
                     this.lastDetectionTime = timestamp;
                 } catch (error) {
-                    console.error('Error in pose detection:', error);
+                    // On mobile, don't spam console with timeout errors
+                    if (!this.isMobile || error.message !== 'Avatar pose detection timeout') {
+                        console.error('Error in avatar pose detection:', error);
+                    }
+                    // Continue the loop even on error to prevent freezing
                 }
             }
             
-            // Continue animation loop
-            this.animationId = requestAnimationFrame(detectAndRender);
+            // Use setTimeout on mobile, requestAnimationFrame on desktop
+            if (this.isMobile) {
+                this.animationId = setTimeout(() => {
+                    detectAndRender(Date.now())
+                }, this.detectionInterval)
+            } else {
+                this.animationId = requestAnimationFrame(detectAndRender);
+            }
         };
         
-        this.animationId = requestAnimationFrame(detectAndRender);
+        if (this.isMobile) {
+            this.animationId = setTimeout(() => {
+                detectAndRender(Date.now())
+            }, this.detectionInterval)
+        } else {
+            this.animationId = requestAnimationFrame(detectAndRender);
+        }
     }
     
     setExerciseType(exerciseType) {

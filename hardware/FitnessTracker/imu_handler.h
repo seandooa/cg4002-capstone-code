@@ -9,7 +9,6 @@ const float BICEP_CURL_END_ANGLE   = 50.0;
 const float LATERAL_RAISE_START_ANGLE = 150.0;
 const float LATERAL_RAISE_END_ANGLE   = 125.0;
 
-// --- NEW: Squat Acceleration Thresholds (in m/s^2) ---
 // Resting value is ~9.8. These are now based on magnitude.
 const float SQUAT_DOWN_THRESHOLD = 5;  // (i.e., < 8.5) "Unweighted"
 const float SQUAT_UP_THRESHOLD   = 11; // (i.e., > 11.5) "Pushing up"

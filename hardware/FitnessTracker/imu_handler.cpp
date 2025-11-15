@@ -15,13 +15,8 @@ SquatState squatState = SQUAT_REST;
 
 int repCount = 0;
 
-// (Your threshold constants go here or in the .h file)
-// const float SQUAT_DOWN_THRESHOLD = 8.5;
-// const float SQUAT_UP_THRESHOLD   = 11.5;
-
 // --- Helper for Arm Exercises ---
 void processRep(float angle, float startThreshold, float endThreshold, bool inverted) {
-  // (This function is unchanged)
   switch (repState) {
     case RESTING:
       if ((!inverted && angle > startThreshold) || (inverted && angle < startThreshold))
@@ -42,7 +37,6 @@ void processRep(float angle, float startThreshold, float endThreshold, bool inve
   }
 }
 
-// --- MODIFIED: Helper for Squat Exercises ---
 void processSquat(float magnitude) {
   switch (squatState) {
     case SQUAT_REST:
@@ -76,7 +70,6 @@ void processSquat(float magnitude) {
 
 
 void setup_imu() {
-  // (This function is unchanged)
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
     while (1) delay(10);
@@ -88,7 +81,6 @@ void setup_imu() {
 }
 
 void update_rep_counter(Mode currentMode) {
-  // (This function is unchanged)
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
@@ -117,12 +109,10 @@ void update_rep_counter(Mode currentMode) {
 }
 
 int get_rep_count() {
-  // (This function is unchanged)
   return repCount;
 }
 
 void reset_reps() {
-  // (This function is unchanged)
   repCount = 0;
   repState = RESTING;
   squatState = SQUAT_REST;
